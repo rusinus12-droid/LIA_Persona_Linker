@@ -2,6 +2,7 @@
 //@display-name LIA: Persona Linker
 //@api 3.0
 //@version 0.22.16
+//@update-url https://raw.githubusercontent.com/rusinus12-droid/LIA_Persona_Linker/refs/heads/main/LIA_Persona_Linker.js
 //@allowed-ipc flashback_hayaku_bridge
 //@arg max_lore_entries int Legacy lore breadth base; v0.22.15 keeps the protected + reranked Top-K lore pipeline
 //@arg max_lore_chars int Maximum characters copied from each lorebook entry as generation context
