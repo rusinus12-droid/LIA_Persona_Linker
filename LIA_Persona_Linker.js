@@ -1,7 +1,9 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.22.16
+//@version 0.22.17
+
+/* v0.22.17 shards Live Persona bindings by chat scope with a lightweight index; handoff still forks only current state/core and resets per-session ledgers. */
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/LIA_Persona_Linker/refs/heads/main/LIA_Persona_Linker.js
 //@allowed-ipc flashback_hayaku_bridge
 //@arg max_lore_entries int Legacy lore breadth base; v0.22.15 keeps the protected + reranked Top-K lore pipeline
@@ -33,13 +35,16 @@
   const RESULT_VAULT_STORAGE_KEY = "dynamicPersonaLorebookGeneratorResultVault";
   const WORLD_BLUEPRINT_STORAGE_KEY = "liaPersonaLinkerWorldBlueprintVaultV1";
   const LIVE_PERSONA_STORAGE_KEY = "liaPersonaLinkerLivePersonaSyncV1";
+  const LIVE_PERSONA_INDEX_STORAGE_KEY = "liaPersonaLinkerLivePersonaIndexV2";
+  const LIVE_PERSONA_SCOPE_STORAGE_PREFIX = "liaPersonaLinkerLivePersonaScopeV2::";
+  const LIVE_PERSONA_INDEX_SCHEMA = "lia.live_persona_index.v2";
   const PERSONA_PROOF_STORAGE_KEY = "liaPersonaRequestProofV1";
   const LOG_STORAGE_KEY = "liaPersonaLinkerLogsV1";
   const LOG_SCHEMA_VERSION = 1;
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-  const PLUGIN_VERSION = "0.22.16";
+  const PLUGIN_VERSION = "0.22.17";
   const PERSONA_PROOF_VERSION = 1;
   const PERSONA_PROOF_MAX_SCOPES = 96;
   const PERSONA_PROOF_BADGE_REFRESH_MS = 5000;
@@ -110,6 +115,7 @@
   let preservedPersonaEvolution = null;
   let preservedPersonaEvolutionSelection = new Set();
   let cachedLivePersonaStore = null;
+  let cachedLivePersonaStoreComplete = false;
   let livePersonaStorePromise = null;
   const liveSyncInFlightScopes = new Set();
   const livePersonaForkInFlight = new Map();
@@ -680,6 +686,7 @@
         dynamicName: boundPersona?.name || "",
       },
       liveBinding,
+      livePersonaStorage: { mode: 'scope_sharded_v2', indexKey: LIVE_PERSONA_INDEX_STORAGE_KEY },
       requestProof: proof,
       provider: {
         provider: cfg.provider,
@@ -2107,29 +2114,154 @@
     return { version: PERSONA_BINDING_MANAGER_VERSION, bindings };
   }
 
+  function livePersonaScopeStorageKey(scopeKey) {
+    return `${LIVE_PERSONA_SCOPE_STORAGE_PREFIX}${hashText(String(scopeKey || '')).slice(0, 24)}`;
+  }
+
+  async function readLivePersonaIndex(storage) {
+    const raw = storage?.getItem ? await storage.getItem(LIVE_PERSONA_INDEX_STORAGE_KEY) : null;
+    let parsed = raw;
+    if (typeof raw === 'string' && raw.trim()) {
+      try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
+    }
+    const entries = parsed?.schema === LIVE_PERSONA_INDEX_SCHEMA && parsed.entries && typeof parsed.entries === 'object' && !Array.isArray(parsed.entries)
+      ? parsed.entries
+      : {};
+    return { schema: LIVE_PERSONA_INDEX_SCHEMA, version: 2, updatedAt: String(parsed?.updatedAt || ''), entries };
+  }
+
+  async function writeLivePersonaIndex(storage, index) {
+    if (!storage?.setItem) throw new Error('RisuAI pluginStorage가 아직 준비되지 않았습니다.');
+    const payload = {
+      schema: LIVE_PERSONA_INDEX_SCHEMA,
+      version: 2,
+      updatedAt: new Date().toISOString(),
+      entries: index?.entries && typeof index.entries === 'object' ? index.entries : {}
+    };
+    await storage.setItem(LIVE_PERSONA_INDEX_STORAGE_KEY, JSON.stringify(payload));
+    return payload;
+  }
+
+  async function writeSplitLivePersonaStoreRaw(storage, store, existingIndex = null) {
+    const normalized = normalizeLivePersonaStore(store);
+    const index = existingIndex || await readLivePersonaIndex(storage);
+    const nextEntries = {};
+    for (const [scopeKey, rawBinding] of Object.entries(normalized.bindings || {})) {
+      const binding = normalizeLivePersonaBinding({ ...(rawBinding || {}), scopeKey: rawBinding?.scopeKey || scopeKey });
+      if (!binding) continue;
+      const storageKey = livePersonaScopeStorageKey(binding.scopeKey);
+      const serialized = JSON.stringify(binding);
+      const digest = hashText(serialized);
+      const previous = index.entries?.[binding.scopeKey];
+      if (!previous || previous.digest !== digest || previous.storageKey !== storageKey) {
+        await storage.setItem(storageKey, serialized);
+      }
+      nextEntries[binding.scopeKey] = {
+        storageKey,
+        digest,
+        livePersonaId: String(binding.livePersonaId || ''),
+        updatedAt: String(binding.updatedAt || new Date().toISOString())
+      };
+    }
+    for (const [scopeKey, previous] of Object.entries(index.entries || {})) {
+      if (nextEntries[scopeKey]) continue;
+      try { await storage.removeItem?.(previous?.storageKey || livePersonaScopeStorageKey(scopeKey)); } catch (_) {}
+    }
+    const persistedIndex = await writeLivePersonaIndex(storage, { entries: nextEntries });
+    cachedLivePersonaStore = normalized;
+    cachedLivePersonaStoreComplete = true;
+    return { store: normalizeLivePersonaStore(normalized), index: persistedIndex };
+  }
+
+  async function migrateLegacyLivePersonaStore(storage) {
+    const raw = storage?.getItem ? await storage.getItem(LIVE_PERSONA_STORAGE_KEY) : null;
+    let parsed = raw;
+    if (typeof raw === 'string' && raw.trim()) {
+      try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
+    }
+    const legacy = normalizeLivePersonaStore(parsed || {});
+    if (!Object.keys(legacy.bindings || {}).length) return null;
+    const result = await writeSplitLivePersonaStoreRaw(storage, legacy, { schema: LIVE_PERSONA_INDEX_SCHEMA, version: 2, entries: {} });
+    try { await storage.removeItem?.(LIVE_PERSONA_STORAGE_KEY); } catch (_) {}
+    appendDebugLog('storage', 'live_persona_store_migrated_v2', { bindings: Object.keys(legacy.bindings || {}).length }, 'info');
+    return result.store;
+  }
+
   async function readLivePersonaStore(force = false) {
-    if (!force && cachedLivePersonaStore) return normalizeLivePersonaStore(cachedLivePersonaStore);
+    if (!force && cachedLivePersonaStore && cachedLivePersonaStoreComplete) return normalizeLivePersonaStore(cachedLivePersonaStore);
     if (livePersonaStorePromise) return livePersonaStorePromise;
     livePersonaStorePromise = (async () => {
       try {
         const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
-        const raw = storage?.getItem ? await storage.getItem(LIVE_PERSONA_STORAGE_KEY) : null;
-        cachedLivePersonaStore = normalizeLivePersonaStore(raw);
+        if (!storage?.getItem) return normalizeLivePersonaStore({});
+        let index = await readLivePersonaIndex(storage);
+        if (!Object.keys(index.entries || {}).length) {
+          const migrated = await migrateLegacyLivePersonaStore(storage);
+          if (migrated) {
+            cachedLivePersonaStore = normalizeLivePersonaStore(migrated);
+            cachedLivePersonaStoreComplete = true;
+            return normalizeLivePersonaStore(migrated);
+          }
+          index = await readLivePersonaIndex(storage);
+        }
+        const bindings = {};
+        const rows = Object.entries(index.entries || {});
+        for (let offset = 0; offset < rows.length; offset += 12) {
+          const batch = rows.slice(offset, offset + 12);
+          const loaded = await Promise.all(batch.map(async ([scopeKey, meta]) => {
+            const raw = await storage.getItem(meta?.storageKey || livePersonaScopeStorageKey(scopeKey));
+            let parsed = raw;
+            if (typeof raw === 'string' && raw.trim()) {
+              try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
+            }
+            const binding = normalizeLivePersonaBinding({ ...(parsed || {}), scopeKey: parsed?.scopeKey || scopeKey });
+            return [scopeKey, binding];
+          }));
+          for (const [scopeKey, binding] of loaded) if (binding) bindings[scopeKey] = binding;
+        }
+        cachedLivePersonaStore = normalizeLivePersonaStore({ version: PERSONA_BINDING_MANAGER_VERSION, bindings });
+        cachedLivePersonaStoreComplete = true;
       } catch (_) {
         cachedLivePersonaStore = normalizeLivePersonaStore({});
+        cachedLivePersonaStoreComplete = false;
       }
       return normalizeLivePersonaStore(cachedLivePersonaStore);
     })().finally(() => { livePersonaStorePromise = null; });
     return livePersonaStorePromise;
   }
 
+  async function readLivePersonaBindingByScopeKey(scopeKey, force = false) {
+    const key = String(scopeKey || '').trim();
+    if (!key) return null;
+    if (!force && cachedLivePersonaStore?.bindings?.[key]) return normalizeLivePersonaBinding(cachedLivePersonaStore.bindings[key]);
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    if (!storage?.getItem) return null;
+    const index = await readLivePersonaIndex(storage);
+    const meta = index.entries?.[key];
+    if (!meta) {
+      const store = await readLivePersonaStore(force);
+      return normalizeLivePersonaBinding(store.bindings[key] || null);
+    }
+    const raw = await storage.getItem(meta.storageKey || livePersonaScopeStorageKey(key));
+    let parsed = raw;
+    if (typeof raw === 'string' && raw.trim()) {
+      try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
+    }
+    const binding = normalizeLivePersonaBinding({ ...(parsed || {}), scopeKey: parsed?.scopeKey || key });
+    if (binding) {
+      const store = normalizeLivePersonaStore(cachedLivePersonaStore || {});
+      store.bindings[key] = binding;
+      cachedLivePersonaStore = store;
+    }
+    return binding;
+  }
+
   async function writeLivePersonaStore(store) {
     const normalized = normalizeLivePersonaStore(store);
     const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
-    if (!storage?.setItem) throw new Error("RisuAI pluginStorage가 아직 준비되지 않았습니다.");
-    await storage.setItem(LIVE_PERSONA_STORAGE_KEY, JSON.stringify(normalized));
-    cachedLivePersonaStore = normalized;
-    return normalizeLivePersonaStore(normalized);
+    if (!storage?.setItem) throw new Error('RisuAI pluginStorage가 아직 준비되지 않았습니다.');
+    const result = await writeSplitLivePersonaStoreRaw(storage, normalized);
+    return result.store;
   }
 
 
@@ -2227,13 +2359,52 @@
     }
   }
 
+  async function readLivePersonaIndexWithMigration(storage) {
+    let index = await readLivePersonaIndex(storage);
+    if (!Object.keys(index.entries || {}).length) {
+      await migrateLegacyLivePersonaStore(storage).catch(() => null);
+      index = await readLivePersonaIndex(storage);
+    }
+    return index;
+  }
+
+  async function readLivePersonaOwnerBinding(options = {}) {
+    const currentScopeKey = String(options.currentScopeKey || '').trim();
+    const sourceChatId = String(options.sourceChatId || '').trim();
+    const livePersonaId = String(options.livePersonaId || '').trim();
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    if (!storage?.getItem) return null;
+    const index = await readLivePersonaIndexWithMigration(storage);
+    const rows = Object.entries(index.entries || {}).filter(([scopeKey]) => scopeKey && scopeKey !== currentScopeKey);
+    const chatMarker = sourceChatId ? `|chat:${sourceChatId}` : '';
+    const ranked = rows.map(([scopeKey, meta]) => ({
+      scopeKey,
+      meta: meta || {},
+      score: (sourceChatId && scopeKey.endsWith(chatMarker) ? 8 : 0)
+        + (livePersonaId && String(meta?.livePersonaId || '') === livePersonaId ? 4 : 0)
+    })).filter(item => {
+      if (sourceChatId && livePersonaId) return item.score >= 12;
+      if (sourceChatId) return item.score >= 8;
+      if (livePersonaId) return item.score >= 4;
+      return false;
+    }).sort((a, b) => b.score - a.score || String(b.meta?.updatedAt || '').localeCompare(String(a.meta?.updatedAt || '')));
+    for (const item of ranked) {
+      const binding = await readLivePersonaBindingByScopeKey(item.scopeKey, true);
+      if (!binding) continue;
+      if (sourceChatId && livePersonaBindingChatId(binding) !== sourceChatId) continue;
+      if (livePersonaId && binding.livePersonaId !== livePersonaId) continue;
+      return binding;
+    }
+    return null;
+  }
+
   async function livePersonaReferenceSnapshot(ctx, livePersonaId, excludeScopeKey = "") {
     const wanted = String(livePersonaId || "").trim();
-    const store = await readLivePersonaStore(true);
-    const bindingRefs = Object.values(store.bindings || {})
-      .map(normalizeLivePersonaBinding)
-      .filter((binding) => binding && binding.scopeKey !== excludeScopeKey && binding.livePersonaId === wanted)
-      .map((binding) => binding.scopeKey);
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    const index = storage?.getItem ? await readLivePersonaIndexWithMigration(storage) : { entries: {} };
+    const bindingRefs = Object.entries(index.entries || {})
+      .filter(([scopeKey, meta]) => scopeKey !== excludeScopeKey && String(meta?.livePersonaId || '') === wanted)
+      .map(([scopeKey]) => scopeKey);
     const char = await freshCharacterForPersonaReferenceScan(ctx);
     const chatRefs = asArray(char?.chats).map((chat, index) => ({
       index,
@@ -2337,23 +2508,40 @@
   }
 
   async function readLivePersonaBindingForContext(ctx) {
-    const store = await readLivePersonaStore();
-    return normalizeLivePersonaBinding(store.bindings[livePersonaScopeKey(ctx)] || null);
+    return await readLivePersonaBindingByScopeKey(livePersonaScopeKey(ctx));
   }
 
   async function writeLivePersonaBinding(binding) {
     const normalized = normalizeLivePersonaBinding(binding);
-    if (!normalized) throw new Error("Live Persona binding이 올바르지 않습니다.");
-    const store = await readLivePersonaStore();
+    if (!normalized) throw new Error('Live Persona binding이 올바르지 않습니다.');
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    if (!storage?.setItem) throw new Error('RisuAI pluginStorage가 아직 준비되지 않았습니다.');
+    const index = await readLivePersonaIndexWithMigration(storage);
+    const storageKey = livePersonaScopeStorageKey(normalized.scopeKey);
+    const serialized = JSON.stringify(normalized);
+    const digest = hashText(serialized);
+    await storage.setItem(storageKey, serialized);
+    index.entries[normalized.scopeKey] = { storageKey, digest, livePersonaId: String(normalized.livePersonaId || ''), updatedAt: String(normalized.updatedAt || new Date().toISOString()) };
+    await writeLivePersonaIndex(storage, index);
+    const store = normalizeLivePersonaStore(cachedLivePersonaStore || {});
     store.bindings[normalized.scopeKey] = normalized;
-    await writeLivePersonaStore(store);
+    cachedLivePersonaStore = store;
     return normalized;
   }
 
   async function deleteLivePersonaBinding(scopeKey) {
-    const store = await readLivePersonaStore();
-    delete store.bindings[String(scopeKey || "")];
-    await writeLivePersonaStore(store);
+    const key = String(scopeKey || '').trim();
+    if (!key) return;
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    if (!storage?.setItem) return;
+    const index = await readLivePersonaIndexWithMigration(storage);
+    const meta = index.entries[key];
+    try { await storage.removeItem?.(meta?.storageKey || livePersonaScopeStorageKey(key)); } catch (_) {}
+    delete index.entries[key];
+    await writeLivePersonaIndex(storage, index);
+    const store = normalizeLivePersonaStore(cachedLivePersonaStore || {});
+    delete store.bindings[key];
+    cachedLivePersonaStore = store;
   }
 
   function isAssistantTurnMessage(item) {
@@ -2551,8 +2739,7 @@
     if (!targetScopeKey || targetScopeKey === sourceBinding.scopeKey) {
       return { adopted: false, verified: true, reason: "same_scope", binding: sourceBinding };
     }
-    const store = await readLivePersonaStore(true);
-    const existing = normalizeLivePersonaBinding(store.bindings[targetScopeKey]);
+    const existing = await readLivePersonaBindingByScopeKey(targetScopeKey, true);
     if (existing) {
       const verification = await PersonaBindingManager.inspect(targetCtx, existing).catch(() => null);
       if (verification?.expectedMatch) {
@@ -2640,8 +2827,7 @@
       try { await removeLiaLivePersonaIfUnreferenced(targetCtx, newLivePersonaId, { excludeScopeKey: targetScopeKey, fallbackPersonaId: sourceBinding.sourcePersonaId }); } catch (_) {}
       throw error;
     }
-    store.bindings[targetScopeKey] = provisional;
-    await writeLivePersonaStore(store);
+    await writeLivePersonaBinding(provisional);
     const verification = await PersonaBindingManager.inspect({ ...targetCtx, db: await api.getDatabase?.(["personas", "selectedPersona"]) }, provisional);
     if (!verification.expectedMatch || !verification.livePersonaExists) {
       throw new Error("Fork된 Live Persona의 RisuAI 바인딩 재검증에 실패했습니다.");
@@ -2664,8 +2850,7 @@
   async function ensureInheritedLivePersonaForCurrentChat(runtimeCtx = null, options = {}) {
     const ctx = runtimeCtx || await getLiveRuntimeContext();
     const targetScopeKey = livePersonaScopeKey(ctx);
-    const store = await readLivePersonaStore(options.forceStore === true);
-    const existing = normalizeLivePersonaBinding(store.bindings[targetScopeKey]);
+    const existing = await readLivePersonaBindingByScopeKey(targetScopeKey, options.forceStore === true);
     if (existing) return { adopted: false, verified: true, reason: "current_scope_managed", binding: existing };
 
     const chatState = await PersonaBindingManager.read(ctx).catch(() => ({ personaId: String(ctx?.chat?.bindedPersona || "") }));
@@ -2676,10 +2861,10 @@
       || ctx?.chat?.memorySessionBridge?.sourceChatId
       || ""
     ).trim();
-    let owner = findLivePersonaOwnerBinding(store, { currentScopeKey: targetScopeKey, sourceChatId, livePersonaId: boundPersonaId });
-    if (!owner && sourceChatId) owner = findLivePersonaOwnerBinding(store, { currentScopeKey: targetScopeKey, sourceChatId });
+    let owner = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId, livePersonaId: boundPersonaId });
+    if (!owner && sourceChatId) owner = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId });
     if (!owner && boundPersonaId.startsWith(`${LIVE_PERSONA_ID_PREFIX}::`)) {
-      owner = findLivePersonaOwnerBinding(store, { currentScopeKey: targetScopeKey, livePersonaId: boundPersonaId });
+      owner = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, livePersonaId: boundPersonaId });
     }
     if (!owner) return { adopted: false, verified: false, reason: "no_inherited_live_owner" };
     return await runLivePersonaForkOnce(ctx, owner, {
@@ -2698,9 +2883,8 @@
     if (!sourceChatId || !targetChatId || !transferId) throw new Error("LIA handoff에 sourceChatId/targetChatId/transferId가 필요합니다.");
     const targetCtx = await getLiveRuntimeContextForChatId(targetChatId);
     const targetScopeKey = livePersonaScopeKey(targetCtx);
-    const store = await readLivePersonaStore(true);
-    let sourceBinding = findLivePersonaOwnerBinding(store, { currentScopeKey: targetScopeKey, sourceChatId, livePersonaId: sourceLivePersonaId });
-    if (!sourceBinding) sourceBinding = findLivePersonaOwnerBinding(store, { currentScopeKey: targetScopeKey, sourceChatId });
+    let sourceBinding = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId, livePersonaId: sourceLivePersonaId });
+    if (!sourceBinding) sourceBinding = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId });
     if (!sourceBinding) throw new Error(`Source chat의 LIA Live Persona binding을 찾을 수 없습니다: ${sourceChatId}`);
     const adopted = await runLivePersonaForkOnce(targetCtx, sourceBinding, { reason: "retrace_handoff", sourceChatId, transferId, force: false });
     const binding = normalizeLivePersonaBinding(adopted.binding);
@@ -3633,8 +3817,7 @@ ${revisionText}`);
     if (!source || isLivePersona(source)) throw new Error("연결할 원본 RisuAI Persona를 선택하세요.");
     if (!PersonaBindingManager.capability().available) throw new Error("이 RisuAI 환경에서는 채팅 Persona 바인딩 API를 사용할 수 없습니다.");
     const pairs = collectCompletedTurnPairs(ctx.chat);
-    const store = await readLivePersonaStore();
-    const previous = normalizeLivePersonaBinding(store.bindings[scopeKey]);
+    const previous = await readLivePersonaBindingByScopeKey(scopeKey);
     const currentBindingState = await PersonaBindingManager.read(ctx);
     const preservedPreviousBinding = managerOptions.previousBinding
       || previous?.previousBinding
@@ -3720,8 +3903,7 @@ ${revisionText}`);
       }
       throw error;
     }
-    store.bindings[scopeKey] = provisionalBinding;
-    await writeLivePersonaStore(store);
+    await writeLivePersonaBinding(provisionalBinding);
     // Do not auto-delete an established Live Persona when the source changes.
     // A native RisuAI Persona switch must never make a previously created LIA
     // Persona disappear. Old Live Personas are retained until an explicit user
@@ -3826,9 +4008,8 @@ ${revisionText}`);
   async function checkLivePersonaSync(options = {}) {
     const runtimeCtx = await getLiveRuntimeContext();
     try { await ensureInheritedLivePersonaForCurrentChat(runtimeCtx); } catch (_) {}
-    const store = await readLivePersonaStore(true);
     const scopeKey = livePersonaScopeKey(runtimeCtx);
-    let binding = normalizeLivePersonaBinding(store.bindings[scopeKey]);
+    let binding = await readLivePersonaBindingByScopeKey(scopeKey, true);
     if (!binding) return { skipped: true, reason: "current_chat_not_configured" };
     if (!binding.enabled) return { skipped: true, reason: "current_chat_not_enabled" };
     if (liveSyncInFlightScopes.has(scopeKey)) return { skipped: true, reason: "in_flight" };
@@ -11487,7 +11668,10 @@ ${revisionText}`);
     iconType: "html",
     location: "hamburger",
   }, openUI);
-  try { await readLivePersonaStore(); } catch (_) {}
+  try {
+    const startupCtx = await getLiveRuntimeContext();
+    await readLivePersonaBindingByScopeKey(livePersonaScopeKey(startupCtx));
+  } catch (_) {}
   try { await registerLiaHandoffIpc(); } catch (_) {}
   try { await ensureInheritedLivePersonaForCurrentChat(); } catch (_) {}
   try { await initializePersonaProofExperience(); } catch (_) {}
