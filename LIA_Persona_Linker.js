@@ -1,17 +1,30 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.22.17
+//@version 0.22.21
 
-/* v0.22.17 shards Live Persona bindings by chat scope with a lightweight index; handoff still forks only current state/core and resets per-session ledgers. */
+/* v0.22.21 replaces ambiguous compact-rail icons with short text labels while preserving desktop and mobile navigation. */
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/LIA_Persona_Linker/refs/heads/main/LIA_Persona_Linker.js
 //@allowed-ipc flashback_hayaku_bridge
 //@arg max_lore_entries int Legacy lore breadth base; v0.22.15 keeps the protected + reranked Top-K lore pipeline
 //@arg max_lore_chars int Maximum characters copied from each lorebook entry as generation context
 
 (async () => {
-  const api = globalThis.Risuai || globalThis.risuai;
-  if (!api) return;
+  const RISU_API_ALIASES = Object.freeze(["risuai", "Risuai", "risuApi", "risuAPI", "RisuAI"]);
+  const resolveRisuApi = () => {
+    for (const alias of RISU_API_ALIASES) {
+      try {
+        const candidate = globalThis?.[alias];
+        if (candidate && (typeof candidate === "object" || typeof candidate === "function")) return candidate;
+      } catch (_) {}
+    }
+    return null;
+  };
+  const api = resolveRisuApi();
+  if (!api) {
+    try { console.error(`[LIA] RisuAI host API is unavailable. Checked aliases: ${RISU_API_ALIASES.join(", ")}.`); } catch (_) {}
+    return;
+  }
 
   const PLUGIN_ICON = "🔗";
   // Alternative icon candidates: 🧵 lore/persona thread, 🌉 world bridge, 🪢 relationship knot.
@@ -44,7 +57,7 @@
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-  const PLUGIN_VERSION = "0.22.17";
+  const PLUGIN_VERSION = "0.22.21";
   const PERSONA_PROOF_VERSION = 1;
   const PERSONA_PROOF_MAX_SCOPES = 96;
   const PERSONA_PROOF_BADGE_REFRESH_MS = 5000;
@@ -135,6 +148,15 @@
   let personaProofTransientNotice = null;
   const personaProofPendingRequests = [];
   let liaHandoffIpcRegistered = false;
+  let liaHandoffIpcHandler = null;
+  let liaHandoffIpcRegistration = null;
+  let liaHandoffIpcApi = null;
+  let pluginUnloaded = false;
+  let registeredSettingHandle = null;
+  let registeredButtonHandle = null;
+  let registeredButtonDescriptor = null;
+  let unloadEventHandler = null;
+  let unloadEventRegistration = null;
   let operationLogEntries = [];
   let debugLogEntries = [];
   let logsLoaded = false;
@@ -924,13 +946,7 @@
   }
 
   function getRuntimeApi() {
-    try {
-      if (typeof globalThis.Risuai !== "undefined" && globalThis.Risuai) return globalThis.Risuai;
-    } catch (_) {}
-    try {
-      if (typeof globalThis.risuai !== "undefined" && globalThis.risuai) return globalThis.risuai;
-    } catch (_) {}
-    return api || null;
+    return resolveRisuApi() || api || null;
   }
 
   async function waitForPluginStorage(baseApi = null, opts = {}) {
@@ -1970,6 +1986,11 @@
       || String(persona?.note || "").includes(LIVE_PERSONA_NOTE_MARKER);
   }
 
+  function livePersonaDisplayName(sourceName = "") {
+    const name = String(sourceName || "");
+    return name.trim() ? name : "Persona";
+  }
+
   function livePersonaScopeKey(ctx = {}) {
     const char = ctx.char || {};
     const chat = ctx.chat || {};
@@ -2130,6 +2151,23 @@
     return { schema: LIVE_PERSONA_INDEX_SCHEMA, version: 2, updatedAt: String(parsed?.updatedAt || ''), entries };
   }
 
+  function storageWriteExplicitlyFailed(result) {
+    if (result === false) return true;
+    if (!result || typeof result !== 'object') return false;
+    return ['ok', 'success', 'written', 'durable'].some((field) => (
+      Object.prototype.hasOwnProperty.call(result, field) && result[field] === false
+    ));
+  }
+
+  async function setPluginStorageItemChecked(storage, key, value, operation = 'plugin_storage_write') {
+    if (typeof storage?.setItem !== 'function') throw new Error('RisuAI pluginStorage is not writable.');
+    const result = await storage.setItem(key, value);
+    if (storageWriteExplicitlyFailed(result)) {
+      throw new Error(`${operation} failed for pluginStorage key: ${String(key || '(empty)')}`);
+    }
+    return result;
+  }
+
   async function writeLivePersonaIndex(storage, index) {
     if (!storage?.setItem) throw new Error('RisuAI pluginStorage가 아직 준비되지 않았습니다.');
     const payload = {
@@ -2138,7 +2176,7 @@
       updatedAt: new Date().toISOString(),
       entries: index?.entries && typeof index.entries === 'object' ? index.entries : {}
     };
-    await storage.setItem(LIVE_PERSONA_INDEX_STORAGE_KEY, JSON.stringify(payload));
+    await setPluginStorageItemChecked(storage, LIVE_PERSONA_INDEX_STORAGE_KEY, JSON.stringify(payload), 'live_persona_index_write');
     return payload;
   }
 
@@ -2154,7 +2192,7 @@
       const digest = hashText(serialized);
       const previous = index.entries?.[binding.scopeKey];
       if (!previous || previous.digest !== digest || previous.storageKey !== storageKey) {
-        await storage.setItem(storageKey, serialized);
+        await setPluginStorageItemChecked(storage, storageKey, serialized, 'live_persona_shard_write');
       }
       nextEntries[binding.scopeKey] = {
         storageKey,
@@ -2511,6 +2549,59 @@
     return await readLivePersonaBindingByScopeKey(livePersonaScopeKey(ctx));
   }
 
+  async function verifyDurableLivePersonaBindingReadback(storage, expectedBinding, expectedDigest = '') {
+    const expected = normalizeLivePersonaBinding(expectedBinding);
+    if (!expected) throw new Error('Cannot verify an invalid Live Persona binding.');
+    if (typeof storage?.getItem !== 'function') throw new Error('RisuAI pluginStorage is not readable.');
+    const storageKey = livePersonaScopeStorageKey(expected.scopeKey);
+    const freshIndex = await readLivePersonaIndex(storage);
+    const indexEntry = freshIndex.entries?.[expected.scopeKey];
+    if (!indexEntry || typeof indexEntry !== 'object') {
+      throw new Error(`Live Persona durable readback failed: target scope is absent from the owner index (${expected.scopeKey}).`);
+    }
+    if (String(indexEntry.storageKey || '') !== storageKey) {
+      throw new Error(`Live Persona durable readback failed: target shard key mismatch (${expected.scopeKey}).`);
+    }
+    const indexedDigest = String(indexEntry.digest || '');
+    if (!indexedDigest || (expectedDigest && indexedDigest !== expectedDigest)) {
+      throw new Error(`Live Persona durable readback failed: target digest mismatch (${expected.scopeKey}).`);
+    }
+    if (String(indexEntry.livePersonaId || '') !== expected.livePersonaId) {
+      throw new Error(`Live Persona durable readback failed: target Live Persona identity mismatch (${expected.scopeKey}).`);
+    }
+    const rawShard = await storage.getItem(storageKey);
+    if (rawShard === null || rawShard === undefined || rawShard === '') {
+      throw new Error(`Live Persona durable readback failed: target shard is missing (${expected.scopeKey}).`);
+    }
+    let parsedShard = rawShard;
+    let serializedShard = '';
+    if (typeof rawShard === 'string') {
+      serializedShard = rawShard;
+      try { parsedShard = JSON.parse(rawShard); } catch (_) { parsedShard = null; }
+    } else {
+      try { serializedShard = JSON.stringify(rawShard); } catch (_) { serializedShard = ''; }
+    }
+    if (!serializedShard || hashText(serializedShard) !== indexedDigest) {
+      throw new Error(`Live Persona durable readback failed: owner index/shard digest mismatch (${expected.scopeKey}).`);
+    }
+    const stored = normalizeLivePersonaBinding(parsedShard);
+    if (!stored || stored.scopeKey !== expected.scopeKey || stored.livePersonaId !== expected.livePersonaId) {
+      throw new Error(`Live Persona durable readback failed: stored binding identity mismatch (${expected.scopeKey}).`);
+    }
+    for (const field of ['forkedFromScopeKey', 'forkedFromLivePersonaId', 'handoffSourceChatId', 'handoffTransferId']) {
+      if (String(stored[field] || '') !== String(expected[field] || '')) {
+        throw new Error(`Live Persona durable readback failed: stored handoff lineage mismatch (${field}).`);
+      }
+    }
+    return {
+      durableReadbackVerified: true,
+      binding: stored,
+      storageKey,
+      digest: indexedDigest,
+      indexEntry: { ...indexEntry },
+    };
+  }
+
   async function writeLivePersonaBinding(binding) {
     const normalized = normalizeLivePersonaBinding(binding);
     if (!normalized) throw new Error('Live Persona binding이 올바르지 않습니다.');
@@ -2520,13 +2611,14 @@
     const storageKey = livePersonaScopeStorageKey(normalized.scopeKey);
     const serialized = JSON.stringify(normalized);
     const digest = hashText(serialized);
-    await storage.setItem(storageKey, serialized);
+    await setPluginStorageItemChecked(storage, storageKey, serialized, 'live_persona_binding_shard_write');
     index.entries[normalized.scopeKey] = { storageKey, digest, livePersonaId: String(normalized.livePersonaId || ''), updatedAt: String(normalized.updatedAt || new Date().toISOString()) };
     await writeLivePersonaIndex(storage, index);
+    const readback = await verifyDurableLivePersonaBindingReadback(storage, normalized, digest);
     const store = normalizeLivePersonaStore(cachedLivePersonaStore || {});
-    store.bindings[normalized.scopeKey] = normalized;
+    store.bindings[normalized.scopeKey] = readback.binding;
     cachedLivePersonaStore = store;
-    return normalized;
+    return readback;
   }
 
   async function deleteLivePersonaBinding(scopeKey) {
@@ -2732,6 +2824,27 @@
     return { db: db || {}, charIndex, chatIndex, char: char || {}, chat: chat || {} };
   }
 
+  function requestedLivePersonaForkLineage(sourceBinding, options = {}) {
+    return {
+      forkedFromScopeKey: String(sourceBinding?.scopeKey || '').trim(),
+      forkedFromLivePersonaId: String(options.sourceLivePersonaId || sourceBinding?.livePersonaId || '').trim(),
+      handoffSourceChatId: String(options.sourceChatId || livePersonaBindingChatId(sourceBinding) || '').trim(),
+      handoffTransferId: String(options.transferId || '').trim(),
+    };
+  }
+
+  function livePersonaForkLineageMatches(binding, sourceBinding, options = {}) {
+    const expected = requestedLivePersonaForkLineage(sourceBinding, options);
+    const actual = {
+      forkedFromScopeKey: String(binding?.forkedFromScopeKey || '').trim(),
+      forkedFromLivePersonaId: String(binding?.forkedFromLivePersonaId || '').trim(),
+      handoffSourceChatId: String(binding?.handoffSourceChatId || '').trim(),
+      handoffTransferId: String(binding?.handoffTransferId || '').trim(),
+    };
+    const mismatches = Object.keys(expected).filter((field) => actual[field] !== expected[field]);
+    return { matches: mismatches.length === 0, expected, actual, mismatches };
+  }
+
   async function forkLivePersonaBindingToContext(targetCtx, sourceBindingInput, options = {}) {
     const sourceBinding = normalizeLivePersonaBinding(sourceBindingInput);
     if (!sourceBinding) throw new Error("Fork할 Source Live Persona binding이 없습니다.");
@@ -2742,11 +2855,26 @@
     const existing = await readLivePersonaBindingByScopeKey(targetScopeKey, true);
     if (existing) {
       const verification = await PersonaBindingManager.inspect(targetCtx, existing).catch(() => null);
-      if (verification?.expectedMatch) {
-        return { adopted: false, verified: true, reason: "target_already_managed", binding: existing, verification };
+      const lineage = livePersonaForkLineageMatches(existing, sourceBinding, options);
+      if (verification?.expectedMatch && lineage.matches) {
+        const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+        const durableReadback = await verifyDurableLivePersonaBindingReadback(storage, existing);
+        return {
+          adopted: false,
+          verified: true,
+          durableReadbackVerified: durableReadback.durableReadbackVerified === true,
+          reason: "target_already_managed",
+          binding: durableReadback.binding,
+          verification,
+          durableReadback,
+          lineage,
+        };
+      }
+      if (verification?.expectedMatch && !lineage.matches) {
+        return { adopted: false, verified: false, durableReadbackVerified: false, reason: "target_binding_lineage_mismatch", binding: existing, verification, lineage };
       }
       if (options.force !== true) {
-        return { adopted: false, verified: false, reason: "target_binding_already_exists", binding: existing, verification };
+        return { adopted: false, verified: false, durableReadbackVerified: false, reason: "target_binding_already_exists", binding: existing, verification, lineage };
       }
     }
 
@@ -2762,7 +2890,7 @@
     const pairs = collectCompletedTurnPairs(targetCtx.chat);
     const now = new Date().toISOString();
     const newLivePersonaId = `${LIVE_PERSONA_ID_PREFIX}::${hashText(targetScopeKey).slice(0, 12)}::${hashText(sourceBinding.sourcePersonaId || sourceBinding.sourcePersonaName).slice(0, 10)}::${randomId()}`;
-    const livePersonaName = `${sourceBinding.sourcePersonaName || template?.name || "Persona"} · Live`;
+    const livePersonaName = livePersonaDisplayName(sourceBinding.sourcePersonaName || template?.name);
     const forkReason = String(options.reason || (targetCtx?.chat?.copiedFromChatId ? "chat_handoff" : "foreign_live_binding_detected"));
     const selectedSnapshot = selectedPersonaSnapshotFromDb(db);
     const provisional = normalizeLivePersonaBinding({
@@ -2827,15 +2955,20 @@
       try { await removeLiaLivePersonaIfUnreferenced(targetCtx, newLivePersonaId, { excludeScopeKey: targetScopeKey, fallbackPersonaId: sourceBinding.sourcePersonaId }); } catch (_) {}
       throw error;
     }
-    await writeLivePersonaBinding(provisional);
-    const verification = await PersonaBindingManager.inspect({ ...targetCtx, db: await api.getDatabase?.(["personas", "selectedPersona"]) }, provisional);
+    const durableReadback = await writeLivePersonaBinding(provisional);
+    const persistedBinding = durableReadback.binding;
+    const verification = await PersonaBindingManager.inspect({ ...targetCtx, db: await api.getDatabase?.(["personas", "selectedPersona"]) }, persistedBinding);
     if (!verification.expectedMatch || !verification.livePersonaExists) {
       throw new Error("Fork된 Live Persona의 RisuAI 바인딩 재검증에 실패했습니다.");
     }
-    try { await resetPersonaProofForBindingChange(targetCtx, provisional.livePersonaId); } catch (_) {}
-    appendOperationLog("live_persona_fork", `Live Persona를 새 채팅으로 분기했습니다: ${sourceBinding.livePersonaName || sourceBinding.sourcePersonaName || "Source"} → ${provisional.livePersonaName}`, { sourceScopeKey: sourceBinding.scopeKey, targetScopeKey, reason: forkReason }, "ok");
-    appendDebugLog("live_sync", "fork_success", { sourceScopeKey: sourceBinding.scopeKey, targetScopeKey, sourceLivePersonaId: sourceBinding.livePersonaId, targetLivePersonaId: provisional.livePersonaId, anchorPairCount: provisional.anchorPairCount, reason: forkReason, transferId: provisional.handoffTransferId }, "info");
-    return { adopted: true, verified: true, reason: forkReason, binding: provisional, verification, sourceBinding };
+    const lineage = livePersonaForkLineageMatches(persistedBinding, sourceBinding, options);
+    if (!lineage.matches || durableReadback.durableReadbackVerified !== true) {
+      throw new Error(`Forked Live Persona durable lineage verification failed: ${lineage.mismatches.join(", ") || "owner_readback"}`);
+    }
+    try { await resetPersonaProofForBindingChange(targetCtx, persistedBinding.livePersonaId); } catch (_) {}
+    appendOperationLog("live_persona_fork", `Live Persona를 새 채팅으로 분기했습니다: ${sourceBinding.livePersonaName || sourceBinding.sourcePersonaName || "Source"} → ${persistedBinding.livePersonaName}`, { sourceScopeKey: sourceBinding.scopeKey, targetScopeKey, reason: forkReason }, "ok");
+    appendDebugLog("live_sync", "fork_success", { sourceScopeKey: sourceBinding.scopeKey, targetScopeKey, sourceLivePersonaId: sourceBinding.livePersonaId, targetLivePersonaId: persistedBinding.livePersonaId, anchorPairCount: persistedBinding.anchorPairCount, reason: forkReason, transferId: persistedBinding.handoffTransferId, durableReadbackVerified: true }, "info");
+    return { adopted: true, verified: true, durableReadbackVerified: true, reason: forkReason, binding: persistedBinding, verification, sourceBinding, durableReadback, lineage };
   }
 
   async function runLivePersonaForkOnce(targetCtx, sourceBinding, options = {}) {
@@ -2871,6 +3004,7 @@
       reason: options.reason || (sourceChatId ? "chat_handoff" : "native_chat_copy"),
       sourceChatId: sourceChatId || livePersonaBindingChatId(owner),
       transferId: options.transferId || ctx?.chat?.memorySessionBridge?.transferId || "",
+      sourceLivePersonaId: options.sourceLivePersonaId || owner.livePersonaId,
       force: options.force === true,
     });
   }
@@ -2880,41 +3014,58 @@
     const targetChatId = String(payload.targetChatId || "").trim();
     const transferId = String(payload.transferId || "").trim();
     const sourceLivePersonaId = String(payload.sourceLivePersonaId || "").trim();
-    if (!sourceChatId || !targetChatId || !transferId) throw new Error("LIA handoff에 sourceChatId/targetChatId/transferId가 필요합니다.");
+    if (!sourceChatId || !targetChatId || !transferId || !sourceLivePersonaId) throw new Error("LIA handoff requires sourceChatId, targetChatId, transferId, and sourceLivePersonaId.");
     const targetCtx = await getLiveRuntimeContextForChatId(targetChatId);
     const targetScopeKey = livePersonaScopeKey(targetCtx);
-    let sourceBinding = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId, livePersonaId: sourceLivePersonaId });
-    if (!sourceBinding) sourceBinding = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId });
-    if (!sourceBinding) throw new Error(`Source chat의 LIA Live Persona binding을 찾을 수 없습니다: ${sourceChatId}`);
-    const adopted = await runLivePersonaForkOnce(targetCtx, sourceBinding, { reason: "retrace_handoff", sourceChatId, transferId, force: false });
-    const binding = normalizeLivePersonaBinding(adopted.binding);
+    const sourceBinding = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId, livePersonaId: sourceLivePersonaId });
+    if (!sourceBinding) throw new Error(`Requested source LIA Live Persona binding was not found: ${sourceChatId}/${sourceLivePersonaId}`);
+    const adopted = await runLivePersonaForkOnce(targetCtx, sourceBinding, { reason: "retrace_handoff", sourceChatId, sourceLivePersonaId, transferId, force: false });
+    const binding = normalizeLivePersonaBinding(adopted.durableReadback?.binding || adopted.binding);
+    const lineage = livePersonaForkLineageMatches(binding, sourceBinding, { sourceChatId, sourceLivePersonaId, transferId });
+    if (adopted.verified !== true || adopted.durableReadbackVerified !== true || !binding || !lineage.matches) {
+      throw new Error(`LIA Live Persona handoff was not durably verified: ${adopted.reason || lineage.mismatches.join(", ") || "owner_readback_failed"}`);
+    }
     return {
       schema: LIA_HANDOFF_RECEIPT_SCHEMA,
       action: "adopted",
       adopted: adopted.adopted === true,
-      verified: adopted.verified === true,
-      durable: adopted.verified === true,
+      verified: true,
+      durable: true,
+      durableReadbackVerified: true,
+      ownerPluginId: "lia_persona_linker",
+      authorizedRequester: RETRACE_PLUGIN_ID,
+      mutation: "adopt_chat_handoff",
       sourceChatId, targetChatId, transferId,
       sourceScopeKey: sourceBinding.scopeKey,
-      targetScopeKey: binding?.scopeKey || targetScopeKey,
-      sourceLivePersonaId: sourceBinding.livePersonaId,
-      livePersonaId: binding?.livePersonaId || "",
-      livePersonaName: binding?.livePersonaName || "",
-      anchorPairCount: binding?.anchorPairCount || 0,
-      enabled: binding?.enabled === true,
+      targetScopeKey: binding.scopeKey || targetScopeKey,
+      sourceLivePersonaId,
+      livePersonaId: binding.livePersonaId || "",
+      livePersonaName: binding.livePersonaName || "",
+      forkedFromScopeKey: binding.forkedFromScopeKey,
+      forkedFromLivePersonaId: binding.forkedFromLivePersonaId,
+      handoffSourceChatId: binding.handoffSourceChatId,
+      handoffTransferId: binding.handoffTransferId,
+      ownerStorageKey: String(adopted.durableReadback?.storageKey || ''),
+      ownerStorageDigest: String(adopted.durableReadback?.digest || ''),
+      anchorPairCount: binding.anchorPairCount || 0,
+      enabled: binding.enabled === true,
       reason: adopted.reason || "retrace_handoff",
     };
   }
 
   async function registerLiaHandoffIpc() {
     if (liaHandoffIpcRegistered) return true;
-    if (typeof api.addPluginChannelListener !== "function" || typeof api.postPluginChannelMessage !== "function") return false;
-    await api.addPluginChannelListener(LIA_HANDOFF_REQUEST_CHANNEL, async (message, metadata = {}) => {
+    if (pluginUnloaded) return false;
+    const ipcApi = getRuntimeApi();
+    if (typeof ipcApi?.addPluginChannelListener !== "function" || typeof ipcApi?.postPluginChannelMessage !== "function") return false;
+    const handler = async (message, metadata = {}) => {
+      if (pluginUnloaded) return;
       const request = message && typeof message === "object" && !Array.isArray(message) ? message : {};
       if (request.schema !== LIA_HANDOFF_IPC_SCHEMA || request.kind !== "request") return;
       if (String(metadata?.sender || "") !== RETRACE_PLUGIN_ID) return;
       const requestId = String(request.requestId || "").trim();
       const action = String(request.action || "").trim();
+      if (!requestId || !action) return;
       let response;
       appendDebugLog("handoff", "ipc_request", { requestId, action, sender: String(metadata?.sender || ""), payload: request.payload || {} });
       try {
@@ -2926,10 +3077,55 @@
         appendDebugLog("handoff", "ipc_failed", { requestId, action, error: errorForLog(error) }, "error");
         response = { schema: LIA_HANDOFF_IPC_SCHEMA, kind: "response", requestId, action, ok: false, error: String(error?.message || error) };
       }
-      try { await api.postPluginChannelMessage(RETRACE_PLUGIN_ID, LIA_HANDOFF_RESPONSE_CHANNEL, response); } catch (_) {}
-    });
+      if (pluginUnloaded) return;
+      try { await ipcApi.postPluginChannelMessage(RETRACE_PLUGIN_ID, LIA_HANDOFF_RESPONSE_CHANNEL, response); } catch (_) {}
+    };
+    const registration = await ipcApi.addPluginChannelListener(LIA_HANDOFF_REQUEST_CHANNEL, handler);
+    if (pluginUnloaded) {
+      try { await disposeRegistrationHandle(registration); } catch (_) {}
+      return false;
+    }
+    liaHandoffIpcHandler = handler;
+    liaHandoffIpcRegistration = registration;
+    liaHandoffIpcApi = ipcApi;
     liaHandoffIpcRegistered = true;
     return true;
+  }
+
+  async function disposeRegistrationHandle(registration) {
+    if (typeof registration === 'function') {
+      await registration();
+      return true;
+    }
+    for (const method of ['dispose', 'unsubscribe', 'remove', 'unregister']) {
+      if (typeof registration?.[method] === 'function') {
+        await registration[method]();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function unregisterLiaHandoffIpc() {
+    const handler = liaHandoffIpcHandler;
+    const registration = liaHandoffIpcRegistration;
+    const registeredApi = liaHandoffIpcApi;
+    liaHandoffIpcHandler = null;
+    liaHandoffIpcRegistration = null;
+    liaHandoffIpcApi = null;
+    liaHandoffIpcRegistered = false;
+    try {
+      if (await disposeRegistrationHandle(registration)) return true;
+      for (const method of ['removePluginChannelListener', 'unregisterPluginChannelListener']) {
+        if (handler && typeof registeredApi?.[method] === 'function') {
+          await registeredApi[method](LIA_HANDOFF_REQUEST_CHANNEL, handler);
+          return true;
+        }
+      }
+    } catch (error) {
+      appendDebugLog('handoff', 'ipc_unregister_failed', { error: errorForLog(error) }, 'warn');
+    }
+    return false;
   }
 
   function resolveLivePersonaChoice(personas, value) {
@@ -3835,7 +4031,7 @@ ${revisionText}`);
       : stripLivePersonaState(source.personaPrompt || "");
     const now = new Date().toISOString();
     const selectedSnapshot = selectedPersonaSnapshotFromDb(db);
-    const livePersonaName = `${source.name || "Persona"} · Live`;
+    const livePersonaName = livePersonaDisplayName(source.name);
     const sameBinding = sameSource && previous?.livePersonaId === livePersonaId;
     const provisionalBinding = normalizeLivePersonaBinding({
       ...(sameBinding ? previous : {}),
@@ -3987,6 +4183,7 @@ ${revisionText}`);
 
   async function applyLivePersonaPrompt(runtimeCtx, binding) {
     let prompt = "";
+    const livePersonaName = livePersonaDisplayName(binding.sourcePersonaName || binding.originalSnapshot?.name);
     await mutatePersonaFresh(binding.livePersonaId, (currentPersona) => {
       const currentPrompt = String(currentPersona?.personaPrompt || "");
       const currentHash = hashText(currentPrompt);
@@ -3998,8 +4195,9 @@ ${revisionText}`);
         }
       }
       prompt = renderLivePersonaPrompt(binding);
-      return { ...currentPersona, personaPrompt: prompt };
+      return { ...currentPersona, name: livePersonaName, personaPrompt: prompt };
     });
+    binding.livePersonaName = livePersonaName;
     binding.lastAppliedPromptHash = hashText(prompt);
     binding.updatedAt = new Date().toISOString();
     return prompt;
@@ -9120,11 +9318,11 @@ ${revisionText}`);
           <div class="lia-sidebar-top">
             <button id="dpg-sidebar-collapse" class="lia-sidebar-collapse" type="button" title="사이드바 접기/펼치기">‹</button>
             <nav class="lia-sidebar-nav">
-              <button id="dpg-tab-generate" class="dpg-tab-button ${currentTab === "generate" ? "active" : ""}" type="button" data-workspace-tab="generate"><span class="lia-nav-icon">✦</span><span class="lia-nav-label">생성</span></button>
-              <button id="dpg-tab-edit" class="dpg-tab-button ${currentTab === "edit" ? "active" : ""}" type="button" data-workspace-tab="edit"><span class="lia-nav-icon">◇</span><span class="lia-nav-label">편집</span></button>
-              <button id="dpg-tab-realtime" class="dpg-tab-button ${currentTab === "realtime" ? "active" : ""}" type="button" data-workspace-tab="realtime"><span class="lia-nav-icon">↻</span><span class="lia-nav-label">실시간</span></button>
-              <button id="dpg-tab-vault" class="dpg-tab-button ${currentTab === "vault" ? "active" : ""}" type="button" data-workspace-tab="vault"><span class="lia-nav-icon">▣</span><span class="lia-nav-label">보관함</span></button>
-              <button id="dpg-tab-settings" class="dpg-tab-button ${currentTab === "settings" ? "active" : ""}" type="button" data-workspace-tab="settings"><span class="lia-nav-icon">⚙</span><span class="lia-nav-label">AI 연결</span></button>
+              <button id="dpg-tab-generate" class="dpg-tab-button ${currentTab === "generate" ? "active" : ""}" type="button" data-workspace-tab="generate" aria-label="생성" title="생성"><span class="lia-nav-icon" data-compact-label="생성">✦</span><span class="lia-nav-label">생성</span></button>
+              <button id="dpg-tab-edit" class="dpg-tab-button ${currentTab === "edit" ? "active" : ""}" type="button" data-workspace-tab="edit" aria-label="편집" title="편집"><span class="lia-nav-icon" data-compact-label="편집">◇</span><span class="lia-nav-label">편집</span></button>
+              <button id="dpg-tab-realtime" class="dpg-tab-button ${currentTab === "realtime" ? "active" : ""}" type="button" data-workspace-tab="realtime" aria-label="실시간 동기화" title="실시간 동기화"><span class="lia-nav-icon" data-compact-label="동기화">↻</span><span class="lia-nav-label">실시간</span></button>
+              <button id="dpg-tab-vault" class="dpg-tab-button ${currentTab === "vault" ? "active" : ""}" type="button" data-workspace-tab="vault" aria-label="보관함" title="보관함"><span class="lia-nav-icon" data-compact-label="보관">▣</span><span class="lia-nav-label">보관함</span></button>
+              <button id="dpg-tab-settings" class="dpg-tab-button ${currentTab === "settings" ? "active" : ""}" type="button" data-workspace-tab="settings" aria-label="AI 연결" title="AI 연결"><span class="lia-nav-icon" data-compact-label="AI">⚙</span><span class="lia-nav-label">AI 연결</span></button>
             </nav>
           </div>
           <div class="lia-sidebar-current">
@@ -11621,6 +11819,80 @@ ${revisionText}`);
           .lia-editor-tabs { gap:3px; }
           .lia-editor-tab { padding:7px 8px; }
         }
+
+        /* v0.22.20 final responsive layer. Keep this after the workspace and
+           Persona-panel base rules so later desktop declarations cannot undo it. */
+        @media (max-width: 980px) {
+          .lia-shell { width:100%; max-width:100%; overflow:visible; }
+          .lia-edit-save-panel { grid-template-columns:minmax(0,1fr); align-items:stretch; }
+          .lia-edit-save-actions { min-width:0; grid-template-columns:repeat(3,minmax(0,1fr)); }
+          .lia-edit-save-actions button { min-width:0; overflow-wrap:anywhere; }
+        }
+        @media (min-width: 681px) and (max-width: 980px) {
+          .lia-candidate-grid, .lia-spec-field-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+        }
+        @media (min-width: 681px) and (max-width: 1180px) {
+          .lia-sidebar .lia-nav-icon {
+            width:100%; font-size:0; line-height:1; color:inherit;
+          }
+          .lia-sidebar .lia-nav-icon::after {
+            content:attr(data-compact-label); display:block; width:100%;
+            font-size:11px; font-weight:900; letter-spacing:-.04em;
+            line-height:1.15; text-align:center; white-space:nowrap;
+          }
+        }
+        @media (max-width: 680px) {
+          .lia-header {
+            height:56px; min-height:56px; padding:8px 10px; gap:8px;
+          }
+          .lia-brand-main { flex:1 1 auto; gap:8px; }
+          .lia-brand-icon { width:32px; height:32px; border-radius:10px; font-size:17px; }
+          .lia-brand-title { font-size:15px; white-space:nowrap; }
+          .lia-brand-title > span { display:none; }
+          .lia-header-actions { flex:0 0 auto; gap:4px; }
+          .lia-header-actions button {
+            min-width:0; min-height:34px; padding:6px 7px; font-size:10px; line-height:1; white-space:nowrap;
+          }
+          #dpg-status { top:56px; min-height:38px; padding:8px 10px; overflow-wrap:anywhere; }
+          .lia-app-layout, .lia-app-layout.sidebar-collapsed {
+            grid-template-columns:minmax(0,1fr); min-height:calc(100vh - 94px);
+            padding-bottom:calc(60px + env(safe-area-inset-bottom, 0px));
+          }
+          .lia-workspace { width:100%; padding:12px 10px 20px; }
+          .lia-sidebar {
+            position:fixed; z-index:60; inset:auto 0 0 0; width:100%;
+            height:calc(60px + env(safe-area-inset-bottom, 0px)); min-height:0;
+            display:block; padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+            overflow:visible; border:0; border-top:1px solid var(--lia-line-strong);
+            background:rgba(8,12,20,.96); box-shadow:0 -12px 34px rgba(0,0,0,.32);
+            backdrop-filter:blur(16px);
+          }
+          .lia-sidebar-top { display:block; }
+          .lia-sidebar-nav { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:4px; }
+          .lia-sidebar .dpg-tab-button,
+          .lia-app-layout.sidebar-collapsed .lia-sidebar .dpg-tab-button {
+            width:100%; min-height:48px; padding:4px 2px; flex-direction:column;
+            justify-content:center; gap:1px; border-radius:10px;
+          }
+          .lia-app-layout .lia-nav-label { display:block; font-size:8px; line-height:1.1; white-space:nowrap; }
+          .lia-sidebar .lia-nav-icon { width:auto; font-size:13px; line-height:1; }
+          .lia-sidebar-collapse, .lia-sidebar-current, .lia-sidebar-provider { display:none !important; }
+          .lia-result-card, .lia-result-card > *, .lia-edit-save-panel, .lia-edit-save-actions { min-width:0; max-width:100%; }
+          .lia-editor-tabs {
+            display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px;
+            overflow:visible;
+          }
+          .lia-editor-tab { min-width:0; padding:7px 4px; white-space:normal; line-height:1.2; }
+          .lia-audit-head { align-items:stretch; flex-direction:column; }
+          .lia-audit-head-actions { justify-content:space-between; }
+        }
+        @media (max-width: 480px) {
+          .lia-edit-save-actions { grid-template-columns:minmax(0,1fr); }
+          .lia-panel-title { align-items:stretch; flex-direction:column; }
+          .lia-panel-title > span { max-width:100%; text-align:left; }
+          .lia-live-status-grid { grid-template-columns:minmax(0,1fr); }
+          .lia-evolution-evidence, .lia-evolution-summary { align-items:stretch; flex-direction:column; }
+        }
       </style>
       <main class="lia-shell">
         <header class="lia-header">
@@ -11658,16 +11930,98 @@ ${revisionText}`);
     await refreshPreview();
   }
 
+  async function unregisterUiRegistration(handle, methodNames, fallbackArgumentLists = []) {
+    try {
+      if (await disposeRegistrationHandle(handle)) return true;
+    } catch (error) {
+      appendDebugLog('lifecycle', 'ui_registration_handle_dispose_failed', { error: errorForLog(error) }, 'warn');
+    }
+    for (const method of methodNames) {
+      if (typeof api?.[method] !== 'function') continue;
+      const attempts = [];
+      if (handle !== null && handle !== undefined) attempts.push([handle]);
+      attempts.push(...fallbackArgumentLists);
+      for (const args of attempts) {
+        try {
+          await api[method](...args);
+          return true;
+        } catch (_) {}
+      }
+    }
+    return false;
+  }
+
+  async function unregisterLiaUiRegistrations() {
+    const settingHandle = registeredSettingHandle;
+    const buttonHandle = registeredButtonHandle;
+    const buttonDescriptor = registeredButtonDescriptor;
+    registeredSettingHandle = null;
+    registeredButtonHandle = null;
+    registeredButtonDescriptor = null;
+    const settingRemoved = await unregisterUiRegistration(
+      settingHandle,
+      ['unregisterSetting', 'removeSetting'],
+      [[PLUGIN_DISPLAY_NAME, openUI], [PLUGIN_DISPLAY_NAME]],
+    );
+    const buttonRemoved = await unregisterUiRegistration(
+      buttonHandle,
+      ['unregisterButton', 'removeButton'],
+      [[buttonDescriptor, openUI], [PLUGIN_DISPLAY_NAME, openUI], [PLUGIN_DISPLAY_NAME]],
+    );
+    return { settingRemoved, buttonRemoved };
+  }
+
+  async function handlePluginUnload() {
+    if (pluginUnloaded) return;
+    pluginUnloaded = true;
+    appendDebugLog("lifecycle", "plugin_unload", { version: PLUGIN_VERSION }, "info");
+    try { await persistLogStore(); } catch (_) {}
+    if (logPersistTimer) clearTimeout(logPersistTimer);
+    logPersistTimer = null;
+    if (debugExportSnapshotRefreshTimer) clearTimeout(debugExportSnapshotRefreshTimer);
+    debugExportSnapshotRefreshTimer = null;
+    if (liveSyncTimer) clearInterval(liveSyncTimer);
+    liveSyncTimer = null;
+    if (personaProofBadgeTimer) clearInterval(personaProofBadgeTimer);
+    personaProofBadgeTimer = null;
+    if (liveSyncOutputDebounce) clearTimeout(liveSyncOutputDebounce);
+    liveSyncOutputDebounce = null;
+    try { await unregisterLiaHandoffIpc(); } catch (_) {}
+    try { await unregisterLiaUiRegistrations(); } catch (_) {}
+    try {
+      if (liveSyncOutputListener && typeof api.removeRisuChatListener === "function") await api.removeRisuChatListener("output", liveSyncOutputListener);
+    } catch (_) {}
+    liveSyncOutputListener = null;
+    try {
+      if (personaProofBeforeReplacer && typeof api.removeRisuReplacer === "function") await api.removeRisuReplacer("beforeRequest", personaProofBeforeReplacer);
+      if (personaProofAfterReplacer && typeof api.removeRisuReplacer === "function") await api.removeRisuReplacer("afterRequest", personaProofAfterReplacer);
+    } catch (_) {}
+    personaProofBeforeReplacer = null;
+    personaProofAfterReplacer = null;
+    personaProofHooksEnabled = false;
+    try {
+      if (personaProofMainBadge) {
+        if (personaProofMainBadgeListenerId) await personaProofMainBadge.removeEventListener?.("click", personaProofMainBadgeListenerId);
+        await personaProofMainBadge.remove?.();
+      }
+    } catch (_) {}
+    personaProofMainBadge = null;
+    personaProofMainBadgeListenerId = null;
+    unloadEventHandler = null;
+    unloadEventRegistration = null;
+  }
+
   try { await readLogStore(); } catch (_) {}
   appendOperationLog("plugin_start", `${PLUGIN_DISPLAY_NAME} v${PLUGIN_VERSION} 시작`, {}, "info");
   appendDebugLog("lifecycle", "plugin_start", { version: PLUGIN_VERSION }, "info");
-  await api.registerSetting?.(PLUGIN_DISPLAY_NAME, openUI, PLUGIN_ICON, "html");
-  await api.registerButton?.({
+  registeredSettingHandle = await api.registerSetting?.(PLUGIN_DISPLAY_NAME, openUI, PLUGIN_ICON, "html");
+  registeredButtonDescriptor = {
     name: PLUGIN_DISPLAY_NAME,
     icon: PLUGIN_ICON,
     iconType: "html",
     location: "hamburger",
-  }, openUI);
+  };
+  registeredButtonHandle = await api.registerButton?.(registeredButtonDescriptor, openUI);
   try {
     const startupCtx = await getLiveRuntimeContext();
     await readLivePersonaBindingByScopeKey(livePersonaScopeKey(startupCtx));
@@ -11688,39 +12042,8 @@ ${revisionText}`);
   }
   try {
     if (typeof api.addEventListener === "function") {
-      api.addEventListener("unload", async () => {
-        appendDebugLog("lifecycle", "plugin_unload", { version: PLUGIN_VERSION }, "info");
-        try { await persistLogStore(); } catch (_) {}
-        if (logPersistTimer) clearTimeout(logPersistTimer);
-        logPersistTimer = null;
-        if (debugExportSnapshotRefreshTimer) clearTimeout(debugExportSnapshotRefreshTimer);
-        debugExportSnapshotRefreshTimer = null;
-        if (liveSyncTimer) clearInterval(liveSyncTimer);
-        liveSyncTimer = null;
-        if (personaProofBadgeTimer) clearInterval(personaProofBadgeTimer);
-        personaProofBadgeTimer = null;
-        if (liveSyncOutputDebounce) clearTimeout(liveSyncOutputDebounce);
-        liveSyncOutputDebounce = null;
-        try {
-          if (liveSyncOutputListener && typeof api.removeRisuChatListener === "function") await api.removeRisuChatListener("output", liveSyncOutputListener);
-        } catch (_) {}
-        liveSyncOutputListener = null;
-        try {
-          if (personaProofBeforeReplacer && typeof api.removeRisuReplacer === "function") await api.removeRisuReplacer("beforeRequest", personaProofBeforeReplacer);
-          if (personaProofAfterReplacer && typeof api.removeRisuReplacer === "function") await api.removeRisuReplacer("afterRequest", personaProofAfterReplacer);
-        } catch (_) {}
-        personaProofBeforeReplacer = null;
-        personaProofAfterReplacer = null;
-        personaProofHooksEnabled = false;
-        try {
-          if (personaProofMainBadge) {
-            if (personaProofMainBadgeListenerId) await personaProofMainBadge.removeEventListener?.("click", personaProofMainBadgeListenerId);
-            await personaProofMainBadge.remove?.();
-          }
-        } catch (_) {}
-        personaProofMainBadge = null;
-        personaProofMainBadgeListenerId = null;
-      });
+      unloadEventHandler = handlePluginUnload;
+      unloadEventRegistration = await api.addEventListener("unload", unloadEventHandler);
     }
   } catch (_) {}
 await api.log?.(`${PLUGIN_NAME}: ${PLUGIN_SUBTITLE} loaded`);
