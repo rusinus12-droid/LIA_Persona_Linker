@@ -1,9 +1,9 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.22.22
+//@version 0.22.23
 
-/* v0.22.22 safely migrates LIA-owned legacy *_LIVE Persona names in place without recreating or rebinding them. */
+/* v0.22.23 hardens Ollama Cloud structured generation with canonical templates, tolerant normalization, and one repair pass. */
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/LIA_Persona_Linker/refs/heads/main/LIA_Persona_Linker.js
 //@allowed-ipc flashback_hayaku_bridge
 //@arg max_lore_entries int Legacy lore breadth base; v0.22.15 keeps the protected + reranked Top-K lore pipeline
@@ -57,7 +57,7 @@
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-  const PLUGIN_VERSION = "0.22.22";
+  const PLUGIN_VERSION = "0.22.23";
   const PERSONA_PROOF_VERSION = 1;
   const PERSONA_PROOF_MAX_SCOPES = 96;
   const PERSONA_PROOF_BADGE_REFRESH_MS = 5000;
@@ -4588,6 +4588,46 @@ ${revisionText}`);
     return unique(asArray(value).map((item) => compact(item)), max);
   }
 
+  function structuredFieldLabel(value) {
+    return String(value || "")
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function structuredPersonaText(value, depth = 0) {
+    if (value === null || value === undefined || value === "") return "";
+    if (typeof value === "string" || typeof value === "number") return compact(value);
+    if (typeof value === "boolean") return value ? "yes" : "no";
+    if (depth >= 3) return "";
+    if (Array.isArray(value)) {
+      return value.map((item) => structuredPersonaText(item, depth + 1)).filter(Boolean).join(", ");
+    }
+    if (typeof value === "object") {
+      return Object.entries(value).map(([key, item]) => {
+        if (item === false || item === null || item === undefined || item === "") return "";
+        const text = structuredPersonaText(item, depth + 1);
+        if (!text) return "";
+        return item === true ? structuredFieldLabel(key) : `${structuredFieldLabel(key)}: ${text}`;
+      }).filter(Boolean).join("; ");
+    }
+    return "";
+  }
+
+  function normalizeStructuredStringArray(value, max = 16) {
+    if (Array.isArray(value)) return unique(value.map((item) => structuredPersonaText(item)).filter(Boolean), max);
+    if (value && typeof value === "object") {
+      return unique(Object.entries(value).map(([key, item]) => {
+        if (item === false || item === null || item === undefined || item === "") return "";
+        const text = structuredPersonaText(item);
+        return item === true ? structuredFieldLabel(key) : (text ? `${structuredFieldLabel(key)}: ${text}` : "");
+      }).filter(Boolean), max);
+    }
+    const text = compact(value);
+    return text ? [text] : [];
+  }
+
   function parseJsonObject(raw) {
     if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
     const text = stripCodeFence(raw);
@@ -4657,6 +4697,35 @@ ${revisionText}`);
     return null;
   }
 
+  function findRawPersonaSpecValue(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 4) return null;
+    if (!Array.isArray(value)) {
+      const direct = value.personaSpec || value.persona_spec;
+      if (direct && typeof direct === "object" && !Array.isArray(direct)) return direct;
+      for (const key of ["result", "data", "output", "message", "content"]) {
+        const nested = findRawPersonaSpecValue(value[key], depth + 1);
+        if (nested) return nested;
+      }
+    } else {
+      for (const item of value) {
+        const nested = findRawPersonaSpecValue(item, depth + 1);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+
+  function personaSpecStructuralRepairNeeded(rawContent) {
+    const parsed = parseJsonValueFlexible(rawContent);
+    const rawSpec = findRawPersonaSpecValue(parsed);
+    if (!rawSpec) return false;
+    if (["identity", "profile", "sections"].some((key) => rawSpec[key] && typeof rawSpec[key] === "object")) return true;
+    if (!compact(rawSpec.name) || !compact(rawSpec.role)) return true;
+    if (typeof rawSpec.personality !== "string" || !rawSpec.personality.trim()) return true;
+    return ["appearance", "background", "relationshipStyle", "relationshipToCharacter", "preferences", "conflictRepair", "knowledgeBoundary"]
+      .some((key) => rawSpec[key] && typeof rawSpec[key] === "object");
+  }
+
   const PERSONA_EVOLUTION_FIELD_ALIASES = Object.freeze({
     name: "name", 이름: "name",
     gender: "gender", sex: "gender", 성별: "gender",
@@ -4703,21 +4772,21 @@ ${revisionText}`);
     const parsed = parseJsonObject(raw);
     if (!parsed) return null;
     const blueprint = {
-      summary: String(parsed.summary || "").trim(),
-      genreTone: String(parsed.genreTone || parsed.genre_tone || "").trim(),
-      eraTechnology: String(parsed.eraTechnology || parsed.era_technology || "").trim(),
-      geographyCulture: String(parsed.geographyCulture || parsed.geography_culture || "").trim(),
-      namingConventions: String(parsed.namingConventions || parsed.naming_conventions || "").trim(),
-      speciesRules: String(parsed.speciesRules || parsed.species_rules || "").trim(),
-      powerSystem: String(parsed.powerSystem || parsed.power_system || "").trim(),
-      socialStructure: String(parsed.socialStructure || parsed.social_structure || "").trim(),
-      institutions: normalizeStringArray(parsed.institutions, 16),
-      commonRoles: normalizeStringArray(parsed.commonRoles || parsed.common_roles, 20),
-      relationshipNorms: String(parsed.relationshipNorms || parsed.relationship_norms || "").trim(),
-      hardConstraints: normalizeStringArray(parsed.hardConstraints || parsed.hard_constraints, 24),
-      safeCreativeSpace: normalizeStringArray(parsed.safeCreativeSpace || parsed.safe_creative_space, 24),
-      unknowns: normalizeStringArray(parsed.unknowns, 20),
-      evidenceNotes: normalizeStringArray(parsed.evidenceNotes || parsed.evidence_notes, 20),
+      summary: structuredPersonaText(parsed.summary || parsed.worldName || parsed.world_name),
+      genreTone: structuredPersonaText(parsed.genreTone || parsed.genre_tone),
+      eraTechnology: structuredPersonaText(parsed.eraTechnology || parsed.era_technology),
+      geographyCulture: structuredPersonaText(parsed.geographyCulture || parsed.geography_culture),
+      namingConventions: structuredPersonaText(parsed.namingConventions || parsed.naming_conventions),
+      speciesRules: structuredPersonaText(parsed.speciesRules || parsed.species_rules),
+      powerSystem: structuredPersonaText(parsed.powerSystem || parsed.power_system),
+      socialStructure: structuredPersonaText(parsed.socialStructure || parsed.social_structure),
+      institutions: normalizeStructuredStringArray(parsed.institutions, 16),
+      commonRoles: normalizeStructuredStringArray(parsed.commonRoles || parsed.common_roles, 20),
+      relationshipNorms: structuredPersonaText(parsed.relationshipNorms || parsed.relationship_norms),
+      hardConstraints: normalizeStructuredStringArray(parsed.hardConstraints || parsed.hard_constraints, 24),
+      safeCreativeSpace: normalizeStructuredStringArray(parsed.safeCreativeSpace || parsed.safe_creative_space, 24),
+      unknowns: normalizeStructuredStringArray(parsed.unknowns, 20),
+      evidenceNotes: normalizeStructuredStringArray(parsed.evidenceNotes || parsed.evidence_notes, 20),
     };
     if (!blueprint.summary && !blueprint.hardConstraints.length && !blueprint.safeCreativeSpace.length) return null;
     return blueprint;
@@ -4726,30 +4795,38 @@ ${revisionText}`);
   function normalizePersonaSpec(raw) {
     const parsed = parseJsonObject(raw);
     if (!parsed) return null;
+    const identity = parsed.identity && typeof parsed.identity === "object" && !Array.isArray(parsed.identity) ? parsed.identity : {};
+    const personalityBlock = parsed.personality && typeof parsed.personality === "object" && !Array.isArray(parsed.personality) ? parsed.personality : {};
+    const relationshipBlock = parsed.relationship && typeof parsed.relationship === "object" && !Array.isArray(parsed.relationship) ? parsed.relationship : {};
+    const personalityCore = personalityBlock.coreTraits || personalityBlock.core_traits || personalityBlock.traits || personalityBlock.summary || parsed.personality;
+    const boundaryValues = unique([
+      ...normalizeStructuredStringArray(parsed.boundaries, 16),
+      ...normalizeStructuredStringArray(relationshipBlock.boundary || relationshipBlock.boundaries, 16),
+    ], 16);
     const spec = {
-      name: String(parsed.name || "").trim(),
-      gender: String(parsed.gender || "").trim(),
-      age: String(parsed.age || "").trim(),
-      speciesRace: String(parsed.speciesRace || parsed.species_race || parsed.species || parsed.race || "").trim(),
-      origin: String(parsed.origin || parsed.nationality || "").trim(),
-      role: String(parsed.role || "").trim(),
-      appearance: String(parsed.appearance || "").trim(),
-      personality: String(parsed.personality || "").trim(),
-      visibleSide: String(parsed.visibleSide || parsed.visible_side || "").trim(),
-      hiddenSide: String(parsed.hiddenSide || parsed.hidden_side || "").trim(),
-      internalContradiction: String(parsed.internalContradiction || parsed.internal_contradiction || "").trim(),
-      background: String(parsed.background || "").trim(),
-      speech: String(parsed.speech || "").trim(),
-      motivation: String(parsed.motivation || "").trim(),
-      relationshipStyle: String(parsed.relationshipStyle || parsed.relationship_style || "").trim(),
-      relationshipToCharacter: String(parsed.relationshipToCharacter || parsed.relationship_to_character || "").trim(),
-      preferences: String(parsed.preferences || "").trim(),
-      conflictRepair: String(parsed.conflictRepair || parsed.conflict_repair || "").trim(),
-      skills: normalizeStringArray(parsed.skills, 16),
-      limitations: normalizeStringArray(parsed.limitations, 16),
-      knowledgeBoundary: String(parsed.knowledgeBoundary || parsed.knowledge_boundary || "").trim(),
-      boundaries: normalizeStringArray(parsed.boundaries, 16),
-      worldFitNotes: normalizeStringArray(parsed.worldFitNotes || parsed.world_fit_notes, 16),
+      name: compact(parsed.name || identity.name || ""),
+      gender: compact(parsed.gender || identity.gender || identity.sex || ""),
+      age: compact(parsed.age || identity.age || ""),
+      speciesRace: compact(parsed.speciesRace || parsed.species_race || parsed.species || parsed.race || identity.speciesRace || identity.species_race || identity.species || identity.race || ""),
+      origin: compact(parsed.origin || parsed.nationality || identity.origin || identity.nationality || ""),
+      role: compact(parsed.role || identity.role || identity.occupation || ""),
+      appearance: structuredPersonaText(parsed.appearance),
+      personality: structuredPersonaText(personalityCore),
+      visibleSide: structuredPersonaText(parsed.visibleSide || parsed.visible_side),
+      hiddenSide: structuredPersonaText(parsed.hiddenSide || parsed.hidden_side),
+      internalContradiction: structuredPersonaText(parsed.internalContradiction || parsed.internal_contradiction || personalityBlock.internalContradiction || personalityBlock.internal_contradiction),
+      background: structuredPersonaText(parsed.background),
+      speech: structuredPersonaText(parsed.speech || personalityBlock.speech),
+      motivation: structuredPersonaText(parsed.motivation || personalityBlock.motivation),
+      relationshipStyle: structuredPersonaText(parsed.relationshipStyle || parsed.relationship_style || relationshipBlock.style || relationshipBlock.route),
+      relationshipToCharacter: structuredPersonaText(parsed.relationshipToCharacter || parsed.relationship_to_character || relationshipBlock.initial || relationshipBlock.toCharacter || relationshipBlock.to_character),
+      preferences: structuredPersonaText(parsed.preferences || personalityBlock.preferences),
+      conflictRepair: structuredPersonaText(parsed.conflictRepair || parsed.conflict_repair || relationshipBlock.conflictRepair || relationshipBlock.conflict_repair || relationshipBlock.repair),
+      skills: normalizeStructuredStringArray(parsed.skills || personalityBlock.strengths, 16),
+      limitations: normalizeStructuredStringArray(parsed.limitations || parsed.weaknesses || parsed.weakness || personalityBlock.flaws || personalityBlock.weaknesses, 16),
+      knowledgeBoundary: structuredPersonaText(parsed.knowledgeBoundary || parsed.knowledge_boundary || relationshipBlock.knowledgeBoundary || relationshipBlock.knowledge_boundary),
+      boundaries: boundaryValues,
+      worldFitNotes: normalizeStructuredStringArray(parsed.worldFitNotes || parsed.world_fit_notes, 16),
     };
     if (!spec.name || !spec.role || !spec.personality) return null;
     return spec;
@@ -4766,19 +4843,19 @@ ${revisionText}`);
       speciesRace: compact(parsed.speciesRace || parsed.species_race || parsed.species || parsed.race || ""),
       origin: compact(parsed.origin || parsed.nationality || ""),
       role: compact(parsed.role || ""),
-      conceptHook: String(parsed.conceptHook || parsed.concept_hook || "").trim(),
-      personalityCore: String(parsed.personalityCore || parsed.personality_core || "").trim(),
+      conceptHook: String(parsed.conceptHook || parsed.concept_hook || parsed.dailyLife || parsed.daily_life || "").trim(),
+      personalityCore: structuredPersonaText(parsed.personalityCore || parsed.personality_core || parsed.personality || parsed.coreTraits || parsed.core_traits),
       internalContradiction: String(parsed.internalContradiction || parsed.internal_contradiction || "").trim(),
-      relationshipSeed: String(parsed.relationshipSeed || parsed.relationship_seed || "").trim(),
-      noveltyReason: String(parsed.noveltyReason || parsed.novelty_reason || "").trim(),
+      relationshipSeed: String(parsed.relationshipSeed || parsed.relationship_seed || parsed.relationshipRoute || parsed.relationship_route || "").trim(),
+      noveltyReason: String(parsed.noveltyReason || parsed.novelty_reason || (parsed.weakness ? `Weakness/cost: ${structuredPersonaText(parsed.weakness)}` : "")).trim(),
     };
     if (!candidate.name || !candidate.role || !candidate.personalityCore) return null;
     return candidate;
   }
 
   function normalizeRandomCandidateBundle(raw) {
-    const parsed = parseJsonObject(raw);
-    const source = asArray(parsed?.candidates || (Array.isArray(raw) ? raw : []));
+    const parsed = parseJsonValueFlexible(raw);
+    const source = Array.isArray(parsed) ? parsed : asArray(parsed?.candidates);
     const seen = new Set();
     return source.map((item) => normalizePersonaCandidate(item)).filter(Boolean).filter((item) => {
       const key = `${item.name.toLowerCase()}|${item.role.toLowerCase()}`;
@@ -4807,8 +4884,8 @@ ${revisionText}`);
   }
 
   function normalizeCharacterCandidateBundle(raw) {
-    const parsed = parseJsonObject(raw);
-    const source = asArray(parsed?.candidates || (Array.isArray(raw) ? raw : []));
+    const parsed = parseJsonValueFlexible(raw);
+    const source = Array.isArray(parsed) ? parsed : asArray(parsed?.candidates);
     const seen = new Set();
     return source.map((item) => normalizeCharacterCandidate(item)).filter(Boolean).filter((item) => {
       const key = item.name.toLowerCase();
@@ -5309,7 +5386,10 @@ ${revisionText}`);
       "Species rules must explicitly say whether the evidence supports human-only, known multiple species, an open species framework, or simply leaves species unknown. Fantasy/sci-fi alone is not evidence for arbitrary species.",
       "Hard constraints must be facts a generated persona must not violate. Safe creative space must describe areas where LIA may invent without contradicting the evidence.",
       "Unknowns must remain unknown rather than being filled with plausible-sounding lore.",
-      "Return exactly one JSON object matching the requested schema and no commentary.",
+      "Return exactly one FLAT JSON object matching the requested schema and no commentary.",
+      "Do not rename keys, return a bare array, or nest values such as namingConventions inside sub-objects.",
+      "Canonical World Blueprint JSON template:",
+      canonicalWorldBlueprintJsonTemplate(),
       "",
       `Target character/world: ${ctx?.char?.name || "{{char}}"}`,
       "",
@@ -5349,10 +5429,55 @@ ${revisionText}`);
     return { key, blueprint, updatedAt: now, generated: true };
   }
 
+  function canonicalPersonaSpecJsonTemplate() {
+    const template = {};
+    for (const [key, definition] of Object.entries(PERSONA_SPEC_JSON_SCHEMA.properties || {})) {
+      template[key] = definition?.type === "array" ? ["..."] : "...";
+    }
+    return JSON.stringify(template, null, 2);
+  }
+
+  function canonicalWorldBlueprintJsonTemplate() {
+    const template = {};
+    for (const [key, definition] of Object.entries(WORLD_BLUEPRINT_JSON_SCHEMA.properties || {})) {
+      template[key] = definition?.type === "array" ? ["..."] : "...";
+    }
+    return JSON.stringify(template, null, 2);
+  }
+
+  function canonicalRandomCandidateJsonTemplate() {
+    const candidate = (number) => ({
+      name: `Candidate ${number}`,
+      gender: "...",
+      age: "...",
+      speciesRace: "...",
+      origin: "...",
+      role: "...",
+      conceptHook: "...",
+      personalityCore: "...",
+      internalContradiction: "...",
+      relationshipSeed: "...",
+      noveltyReason: "...",
+    });
+    return JSON.stringify({ candidates: [candidate(1), candidate(2), candidate(3)] }, null, 2);
+  }
+
+  function structuredGenerationFailureText(primaryContent, repairContent = "") {
+    return [
+      "[PRIMARY STRUCTURED RESPONSE]",
+      String(primaryContent || ""),
+      ...(repairContent ? ["", "[ONE-PASS SCHEMA REPAIR RESPONSE]", String(repairContent)] : []),
+    ].join("\n");
+  }
+
   function personaSpecPromptContract() {
     return [
       "PersonaSpec contract:",
       "- personaSpec is the canonical structured identity for this generation. personaPrompt is an English RisuAI-ready rendering of exactly that spec.",
+      `- personaSpec must be one FLAT object with exactly these canonical keys: ${PERSONA_SPEC_FIELD_KEYS.join(", ")}.`,
+      "- Never nest canonical fields under identity, appearance, personality, background, relationship, boundaries, profile, or sections.",
+      "Canonical flat personaSpec template:",
+      canonicalPersonaSpecJsonTemplate(),
       "- Every important factual identity/behavior detail in personaPrompt must be represented in personaSpec first. Do not introduce a second biography only in prose.",
       "- personaPrompt may elaborate phrasing and operational RP guidance, but it must not contradict personaSpec.",
       "- worldFitNotes should briefly explain how the identity obeys the World Blueprint; they are diagnostic notes, not meta text to repeat in personaPrompt.",
@@ -5463,7 +5588,9 @@ ${revisionText}`);
       "Names must follow the resolved gender, species, origin, era, and naming culture. Species must follow the Blueprint's species rules.",
       "Each candidate should feel playable rather than merely exotic. Give each a cost, vulnerability, or contradiction that can produce RP scenes.",
       "Do not grant guaranteed romance, hidden authority, canon importance, unsupported powers, or predetermined {{char}} feelings.",
-      "Return JSON only.",
+      "Return JSON only. The top-level value must be one object with a candidates array, never a bare array.",
+      "Use exactly this key structure and exactly three candidate objects:",
+      canonicalRandomCandidateJsonTemplate(),
       "",
       conceptBlock,
       ...(guidance ? ["", "Additional hard/soft user constraints:", guidance] : []),
@@ -5495,8 +5622,22 @@ ${revisionText}`);
       config,
       { jsonMode: true, jsonSchema: RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix: buildProviderSharedReference(ctx, "persona"), maxTokens: Math.min(4096, config.maxCompletionTokens || 4096) },
     );
-    const candidates = normalizeRandomCandidateBundle(content);
-    if (candidates.length !== 3) throw new Error(`랜덤 후보를 정확히 3개 추출하지 못했습니다. 인식된 후보: ${candidates.length}개`);
+    let candidates = normalizeRandomCandidateBundle(content);
+    let repairContent = "";
+    if (candidates.length !== 3) {
+      appendDebugLog("generation", "random_candidates_schema_repair_start", { primaryCandidateCount: candidates.length, contentChars: content.length }, "warn");
+      try {
+        repairContent = await repairRandomCandidateOutput(content, config);
+        candidates = normalizeRandomCandidateBundle(repairContent);
+        appendDebugLog("generation", "random_candidates_schema_repair_complete", { repairedCandidateCount: candidates.length, repairChars: repairContent.length }, candidates.length === 3 ? "info" : "warn");
+      } catch (error) {
+        appendDebugLog("generation", "random_candidates_schema_repair_failed", { primaryCandidateCount: candidates.length, error: errorForLog(error) }, "warn");
+      }
+    }
+    if (candidates.length !== 3) {
+      setGeneratedOutputText(structuredGenerationFailureText(content, repairContent));
+      throw new Error(`랜덤 후보를 정확히 3개 추출하지 못했습니다. 인식된 후보: ${candidates.length}개`);
+    }
     preservedRandomCandidates = candidates.map((item) => ({ ...item, id: `lia-candidate::${randomId()}` }));
     preservedSelectedRandomCandidateId = "";
     preservedRandomCandidateContextKey = randomCandidateContextKey(ctx, preservedRandomConceptText, preservedUserRewriteGuidanceText);
@@ -8087,6 +8228,62 @@ ${revisionText}`);
     );
   }
 
+  async function repairRandomCandidateOutput(rawContent, config) {
+    const repairConfig = normalizeLLMConfig({ ...config, temp: 0, reasoningPreset: "off", reasoningEffort: "none", reasoningBudgetTokens: 0, thinkingType: "disabled", serviceTier: "off" });
+    const ollamaCloud = normalizeProviderKey(repairConfig.provider) === "ollama_cloud";
+    return await callIndependentProvider(
+      "You normalize an existing random-persona candidate response. Return one JSON object only.",
+      [
+        "Convert the supplied response into the exact canonical candidate shape below.",
+        "Preserve the three existing candidate concepts. Do not invent a fourth candidate, replace an identity, or add unsupported world facts.",
+        "Map equivalent keys when obvious: personality -> personalityCore, daily_life -> conceptHook, relationship_route -> relationshipSeed.",
+        "If a canonical field is absent, use an empty string instead of inventing content.",
+        "The top-level value must be one object, never a bare array.",
+        canonicalRandomCandidateJsonTemplate(),
+        "Return JSON only with no Markdown fences or commentary.",
+        "",
+        "[RESPONSE TO NORMALIZE]",
+        limitText(String(rawContent || ""), 18000),
+      ].join("\n"),
+      repairConfig,
+      { jsonMode: !ollamaCloud, jsonSchema: ollamaCloud ? null : RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix: "", maxTokens: Math.min(4096, Number(repairConfig.maxCompletionTokens || 4096) || 4096) },
+    );
+  }
+
+  async function repairGeneratedPersonaOutput(rawContent, config, options = {}) {
+    const repairConfig = normalizeLLMConfig({ ...config, temp: 0, reasoningPreset: "off", reasoningEffort: "none", reasoningBudgetTokens: 0, thinkingType: "disabled", serviceTier: "off" });
+    const ollamaCloud = normalizeProviderKey(repairConfig.provider) === "ollama_cloud";
+    const requirePersonaName = options.requirePersonaName === true;
+    const properties = {
+      ...(requirePersonaName ? { personaName: { type: "string" } } : {}),
+      personaSpec: PERSONA_SPEC_JSON_SCHEMA,
+      personaPrompt: { type: "string" },
+    };
+    const schema = { type: "object", properties, required: Object.keys(properties), additionalProperties: false };
+    const outerTemplate = {
+      ...(requirePersonaName ? { personaName: "..." } : {}),
+      personaSpec: JSON.parse(canonicalPersonaSpecJsonTemplate()),
+      personaPrompt: "complete English RisuAI persona-slot profile card",
+    };
+    return await callIndependentProvider(
+      "You repair an existing LIA generation response into its canonical flat schema. Return one JSON object only.",
+      [
+        "Reshape the supplied response without redoing the generation.",
+        "Preserve all existing identity facts and the existing personaPrompt. Do not add, remove, reinterpret, or infer facts.",
+        "Flatten nested identity, appearance, personality, background, relationship, and boundaries sections into the canonical personaSpec fields.",
+        "Use empty strings or empty arrays for truly absent canonical fields rather than inventing content.",
+        "Required exact output shape:",
+        JSON.stringify(outerTemplate, null, 2),
+        "Return JSON only with no Markdown fences or commentary.",
+        "",
+        "[RESPONSE TO NORMALIZE]",
+        limitText(String(rawContent || ""), 24000),
+      ].join("\n"),
+      repairConfig,
+      { jsonMode: !ollamaCloud, jsonSchema: ollamaCloud ? null : schema, sharedPromptPrefix: "", maxTokens: Math.min(8192, Number(repairConfig.maxCompletionTokens || 8192) || 8192) },
+    );
+  }
+
   async function runPersonaAudit() {
     const auditRunId = `audit::${randomId()}`;
     const auditStartedAt = Date.now();
@@ -8417,14 +8614,35 @@ ${revisionText}`);
       },
     );
     if (!content) throw new Error("LLM 응답에서 content를 찾지 못했습니다.");
-    const parsed = parseLLMResult(content);
+    let parsed = parseLLMResult(content);
+    let personaSpec = normalizePersonaSpec(parsed?.personaSpec);
+    let repairContent = "";
+    const structuralRepairNeeded = personaSpecStructuralRepairNeeded(content);
+    if (!parsed?.personaPrompt || !personaSpec || structuralRepairNeeded) {
+      appendDebugLog("generation", "persona_result_schema_repair_start", { generationMode, hasPersonaPrompt: Boolean(parsed?.personaPrompt), hasPersonaSpec: Boolean(personaSpec), structuralRepairNeeded, contentChars: content.length }, "warn");
+      try {
+        repairContent = await repairGeneratedPersonaOutput(content, config, { requirePersonaName: independentMode });
+        const repairedParsed = parseLLMResult(repairContent);
+        const repairedSpec = normalizePersonaSpec(repairedParsed?.personaSpec);
+        if (repairedParsed?.personaPrompt && repairedSpec) {
+          parsed = {
+            ...repairedParsed,
+            personaName: repairedParsed.personaName || parsed?.personaName || "",
+            personaPrompt: parsed?.personaPrompt || repairedParsed.personaPrompt,
+          };
+          personaSpec = repairedSpec;
+        }
+        appendDebugLog("generation", "persona_result_schema_repair_complete", { generationMode, repaired: Boolean(repairedParsed?.personaPrompt && repairedSpec), repairChars: repairContent.length }, repairedParsed?.personaPrompt && repairedSpec ? "info" : "warn");
+      } catch (error) {
+        appendDebugLog("generation", "persona_result_schema_repair_failed", { generationMode, error: errorForLog(error) }, "warn");
+      }
+    }
     if (!parsed?.personaPrompt) {
-      setGeneratedOutputText(content);
+      setGeneratedOutputText(structuredGenerationFailureText(content, repairContent));
       throw new Error("LLM 응답에서 personaPrompt를 추출하지 못했습니다. 원문을 JSON Result 칸에 남겼습니다.");
     }
-    const personaSpec = normalizePersonaSpec(parsed.personaSpec);
     if (!personaSpec) {
-      setGeneratedOutputText(content);
+      setGeneratedOutputText(structuredGenerationFailureText(content, repairContent));
       throw new Error("LLM 응답에서 PersonaSpec을 확인하지 못했습니다. 원문을 JSON Result 칸에 남겼습니다.");
     }
     const personaName = compact(
