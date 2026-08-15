@@ -1,9 +1,9 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.22.23
+//@version 0.26.17
 
-/* v0.22.23 hardens Ollama Cloud structured generation with canonical templates, tolerant normalization, and one repair pass. */
+/* v0.25.3 fixes Persona Asset Studio preview crashes when a Source Persona has no canonical role/personality PersonaSpec fields. */
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/LIA_Persona_Linker/refs/heads/main/LIA_Persona_Linker.js
 //@allowed-ipc flashback_hayaku_bridge
 //@arg max_lore_entries int Legacy lore breadth base; v0.22.15 keeps the protected + reranked Top-K lore pipeline
@@ -53,11 +53,18 @@
   const LIVE_PERSONA_INDEX_SCHEMA = "lia.live_persona_index.v2";
   const PERSONA_PROOF_STORAGE_KEY = "liaPersonaRequestProofV1";
   const LOG_STORAGE_KEY = "liaPersonaLinkerLogsV1";
+  const ILLUSTRATION_CONFIG_STORAGE_KEY = "liaPersonaIllustrationConfigV1";
+  const PERSONA_VISUAL_ASSET_STORAGE_KEY = "liaPersonaVisualAssetStoreV1";
+  const PERSONA_VISUAL_ASSET_BACKUP_PREFIX = "liaPersonaVisualAssetBlobV1::";
+  const PERSONA_VISUAL_ASSET_BACKUP_VERSION = 1;
+  const PERSONA_VISUAL_ASSET_BACKUP_CHUNK_CHARS = 480000;
+  const ILLUSTRATION_CONFIG_VERSION = 2;
+  const PERSONA_VISUAL_ASSET_VERSION = 2;
   const LOG_SCHEMA_VERSION = 1;
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-  const PLUGIN_VERSION = "0.22.23";
+  const PLUGIN_VERSION = "0.26.17";
   const PERSONA_PROOF_VERSION = 1;
   const PERSONA_PROOF_MAX_SCOPES = 96;
   const PERSONA_PROOF_BADGE_REFRESH_MS = 5000;
@@ -127,6 +134,13 @@
   let preservedPersonaAuditFixSelection = new Set();
   let preservedPersonaVariantProfile = "full";
   let preservedPersonaEvolution = null;
+  let preservedVisualEmotionText = "neutral\ngentle smile\nhappy\nangry\nsad\nembarrassed\njealous\nsurprised\nworried\ndetermined\naffectionate\nexhausted";
+  let preservedVisualStyleNotes = "";
+  let preservedVisualCompositionPreset = "standard_waist_up";
+  let preservedVisualCompositionNotes = "";
+  let preservedVisualTargetPersonaId = "__auto__";
+  let visualAssetPreviewUrlCache = new Map();
+  let visualAssetObjectUrls = new Set();
   let preservedPersonaEvolutionSelection = new Set();
   let cachedLivePersonaStore = null;
   let cachedLivePersonaStoreComplete = false;
@@ -469,7 +483,14 @@
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   };
 
-  const LOG_SECRET_KEY_RE = /(?:api.?key|authorization|bearer|token|secret|password|credential|private.?key|cookie|session)/i;
+  const LOG_SECRET_KEY_RE = /(?:api.?key|authorization|bearer|access.?token|refresh.?token|id.?token|secret|password|credential|private.?key|cookie|session)/i;
+  const LOG_PUBLIC_TOKEN_METRIC_KEY_RE = /^(?:maxTokens|maxCompletionTokens|reasoningBudgetTokens|contextWindow|inputTokens|outputTokens|totalTokens)$/i;
+
+  function isSensitiveLogKey(keyHint = "") {
+    const key = String(keyHint || "").trim();
+    if (!key || LOG_PUBLIC_TOKEN_METRIC_KEY_RE.test(key)) return false;
+    return LOG_SECRET_KEY_RE.test(key);
+  }
 
   function sanitizeLogUrl(raw = "") {
     const value = String(raw || "").trim();
@@ -483,7 +504,7 @@
   }
 
   function sanitizeLogValue(value, depth = 0, keyHint = "") {
-    if (LOG_SECRET_KEY_RE.test(String(keyHint || ""))) return "[REDACTED]";
+    if (isSensitiveLogKey(keyHint)) return "[REDACTED]";
     if (value == null || typeof value === "boolean" || typeof value === "number") return value;
     if (typeof value === "string") {
       const redacted = value
@@ -1425,14 +1446,54 @@
     ].join("\n");
   }
 
+  function normalizeExplicitGenderValue(value) {
+    const raw = String(value || "").normalize("NFKC").trim().toLowerCase();
+    if (!raw) return "";
+    if (/^(female|woman|girl|f|여성|여자|여|소녀)(?:\b|\s|$)/i.test(raw)) return "Female";
+    if (/^(male|man|boy|m|남성|남자|남|소년)(?:\b|\s|$)/i.test(raw)) return "Male";
+    if (/female|woman|girl|여성|여자|소녀/i.test(raw) && !/male|man|boy|남성|남자|소년/i.test(raw)) return "Female";
+    if (/male|man|boy|남성|남자|소년/i.test(raw) && !/female|woman|girl|여성|여자|소녀/i.test(raw)) return "Male";
+    return "";
+  }
+
+  function extractExplicitGenderField(text) {
+    const source = String(text || "");
+    const lines = source.split(/\r?\n/).slice(0, 120);
+    for (const line of lines) {
+      const cleaned = String(line || "")
+        .replace(/^\s*[>#]+\s*/, "")
+        .replace(/^\s*[-+•]\s*/, "")
+        .replace(/\*\*/g, "")
+        .replace(/__/g, "")
+        .trim();
+      const match = cleaned.match(/^(?:gender|sex|성별)\s*[:：=\-]\s*(.+)$/i);
+      if (!match) continue;
+      const normalized = normalizeExplicitGenderValue(match[1]);
+      if (normalized) return normalized;
+    }
+    return "";
+  }
+
+  function inferPersonaGender(text) {
+    const source = String(text || "");
+    const explicit = extractExplicitGenderField(source);
+    if (explicit) return explicit;
+
+    // Without an explicit field, use only the profile/header region. Do not scan the
+    // whole Persona because later relationship/background text often mentions people
+    // of another gender (e.g. "male classmates", "her boyfriend").
+    const header = source.split(/\n\s*#{1,6}\s*(?:appearance|background|personality|visible|hidden|preference|외모|배경|성격|내면|취향)/i)[0].slice(0, 1800);
+    const female = /\b(?:female|woman|girl)\b|여성|여자|소녀/i.test(header);
+    const male = /\b(?:male|man|boy)\b|남성|남자|소년/i.test(header);
+    if (female && !male) return "Female";
+    if (male && !female) return "Male";
+    return "Unspecified";
+  }
+
   function inferPersonaFacts(persona) {
     const prompt = String(persona?.personaPrompt || "");
     const text = prompt.toLowerCase();
-    const gender = /(\bmale\b|\bman\b|남성|남자)/i.test(prompt)
-      ? "Male"
-      : /(\bfemale\b|\bwoman\b|여성|여자)/i.test(prompt)
-        ? "Female"
-        : "Unspecified";
+    const gender = inferPersonaGender(prompt);
     const nationality = findFirst(prompt, [
       /Nationality:\s*([^\n]+)/i,
       /국적[:：]\s*([^\n]+)/i,
@@ -1504,11 +1565,8 @@
       /(\d{1,3})\s*[- ]?year[- ]?old/i,
       /(\d{1,3})세/,
     ]);
-    const gender = /gender:\s*female|sex:\s*female|\bfemale\b|여성|여자/i.test(text)
-      ? "Female"
-      : /gender:\s*male|sex:\s*male|\bmale\b|남성|남자/i.test(text)
-        ? "Male"
-        : "";
+    const inferredTargetGender = inferPersonaGender(text);
+    const gender = inferredTargetGender === "Unspecified" ? "" : inferredTargetGender;
     const occupation = findFirst(text, [
       /Occupation:\s*([^\n]+)/i,
       /직업[:：]\s*([^\n]+)/i,
@@ -3915,7 +3973,10 @@ ${revisionText}`);
       if (typeof api.requestPluginPermission === "function") granted = await api.requestPluginPermission("replacer");
       if (granted && typeof api.addRisuReplacer === "function") {
         personaProofBeforeReplacer = async (messages, type) => handlePersonaProofBeforeRequest(messages, type);
-        personaProofAfterReplacer = async (content, type) => handlePersonaProofAfterRequest(content, type);
+        personaProofAfterReplacer = async (content, type) => {
+          const proofed = await handlePersonaProofAfterRequest(content, type);
+          return await handlePersonaEmotionAssetAfterRequest(proofed, type);
+        };
         await api.addRisuReplacer("beforeRequest", personaProofBeforeReplacer);
         await api.addRisuReplacer("afterRequest", personaProofAfterReplacer);
         personaProofHooksEnabled = true;
@@ -4578,11 +4639,13 @@ ${revisionText}`);
     baseContext = refreshPersonaLoreRerank(baseContext);
     const compatibility = inferCompatibility(personaInfo.persona, char, baseContext.personaLoreSignals);
     const savedLLMConfig = await readStoredLLMConfig();
+    const savedIllustrationConfig = await readStoredIllustrationConfig();
+    const visualAssetStore = await readPersonaVisualAssetStore();
     const savedResultVault = await readStoredResultVault();
     const livePersonaBinding = await readLivePersonaBindingForContext(baseContext);
     const livePersonaBindingStatus = livePersonaBinding ? await PersonaBindingManager.inspect({ ...baseContext, db: baseContext.db || db }, livePersonaBinding).catch(() => ({ state: "unavailable", available: false, personaId: "", effectivePersonaName: "" })) : null;
     const personaRequestProof = await readPersonaProofForContext(baseContext);
-    return { ...baseContext, compatibility, savedLLMConfig, savedResultVault, livePersonaBinding, livePersonaBindingStatus, personaRequestProof };
+    return { ...baseContext, compatibility, savedLLMConfig, savedIllustrationConfig, visualAssetStore, savedResultVault, livePersonaBinding, livePersonaBindingStatus, personaRequestProof };
   }
   function normalizeStringArray(value, max = 16) {
     return unique(asArray(value).map((item) => compact(item)), max);
@@ -4832,37 +4895,99 @@ ${revisionText}`);
     return spec;
   }
 
+  function candidateAliasValue(parsed, keys = []) {
+    if (!parsed || typeof parsed !== "object") return undefined;
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(parsed, key)) continue;
+      const value = parsed[key];
+      if (value === null || value === undefined || value === "") continue;
+      return value;
+    }
+    return undefined;
+  }
+
+  function randomCandidateParseDiagnostic(raw, index = 0) {
+    const parsed = parseJsonObject(raw);
+    if (!parsed) return { index, accepted: false, reason: "not_object", keys: [], missingCanonical: ["name", "role", "personalityCore"] };
+    const normalized = normalizePersonaCandidate(parsed);
+    const personalityValue = candidateAliasValue(parsed, [
+      "personalityCore", "personality_core", "personality", "personalityEngine", "personality_engine",
+      "coreTraits", "core_traits", "corePersonality", "core_personality", "temperament", "personalityProfile", "personality_profile",
+    ]);
+    const missingCanonical = [];
+    if (!compact(candidateAliasValue(parsed, ["name", "personaName", "persona_name"]) || "")) missingCanonical.push("name");
+    if (!compact(candidateAliasValue(parsed, ["role", "occupation", "publicRole", "public_role", "job"]) || "")) missingCanonical.push("role");
+    if (!structuredPersonaText(personalityValue)) missingCanonical.push("personalityCore");
+    return {
+      index,
+      accepted: Boolean(normalized),
+      keys: Object.keys(parsed).slice(0, 40),
+      missingCanonical,
+      aliasHits: {
+        conceptHook: ["conceptHook", "concept_hook", "dailyLife", "daily_life", "dailyRoutine", "daily_routine", "hook"].find((key) => parsed[key] !== undefined) || "",
+        personalityCore: ["personalityCore", "personality_core", "personality", "personalityEngine", "personality_engine", "coreTraits", "core_traits", "corePersonality", "core_personality", "temperament", "personalityProfile", "personality_profile"].find((key) => parsed[key] !== undefined) || "",
+        relationshipSeed: ["relationshipSeed", "relationship_seed", "relationshipRoute", "relationship_route", "relationshipPath", "relationship_path", "relationshipDynamic", "relationship_dynamic"].find((key) => parsed[key] !== undefined) || "",
+        noveltyReason: ["noveltyReason", "novelty_reason", "costVulnerability", "cost_vulnerability", "vulnerability", "weaknessCost", "weakness_cost", "weakness", "risk", "drawback", "cost"].find((key) => parsed[key] !== undefined) || "",
+      },
+    };
+  }
+
   function normalizePersonaCandidate(raw) {
     const parsed = parseJsonObject(raw);
     if (!parsed) return null;
+    const weaknessValue = candidateAliasValue(parsed, [
+      "noveltyReason", "novelty_reason", "costVulnerability", "cost_vulnerability", "vulnerability",
+      "weaknessCost", "weakness_cost", "weakness", "risk", "drawback", "cost", "limitation", "limitations",
+    ]);
     const candidate = {
       id: String(parsed.id || `lia-candidate::${randomId()}`),
-      name: compact(parsed.name || ""),
-      gender: compact(parsed.gender || ""),
-      age: compact(parsed.age || ""),
-      speciesRace: compact(parsed.speciesRace || parsed.species_race || parsed.species || parsed.race || ""),
-      origin: compact(parsed.origin || parsed.nationality || ""),
-      role: compact(parsed.role || ""),
-      conceptHook: String(parsed.conceptHook || parsed.concept_hook || parsed.dailyLife || parsed.daily_life || "").trim(),
-      personalityCore: structuredPersonaText(parsed.personalityCore || parsed.personality_core || parsed.personality || parsed.coreTraits || parsed.core_traits),
-      internalContradiction: String(parsed.internalContradiction || parsed.internal_contradiction || "").trim(),
-      relationshipSeed: String(parsed.relationshipSeed || parsed.relationship_seed || parsed.relationshipRoute || parsed.relationship_route || "").trim(),
-      noveltyReason: String(parsed.noveltyReason || parsed.novelty_reason || (parsed.weakness ? `Weakness/cost: ${structuredPersonaText(parsed.weakness)}` : "")).trim(),
+      name: compact(candidateAliasValue(parsed, ["name", "personaName", "persona_name"]) || ""),
+      gender: compact(candidateAliasValue(parsed, ["gender", "sex"]) || ""),
+      age: compact(candidateAliasValue(parsed, ["age", "apparentAge", "apparent_age", "visualAge", "visual_age"]) || ""),
+      speciesRace: compact(candidateAliasValue(parsed, ["speciesRace", "species_race", "species", "race"]) || ""),
+      origin: compact(candidateAliasValue(parsed, ["origin", "nationality", "homeland", "birthplace", "birth_place"]) || ""),
+      role: compact(candidateAliasValue(parsed, ["role", "occupation", "publicRole", "public_role", "job"]) || ""),
+      conceptHook: String(candidateAliasValue(parsed, [
+        "conceptHook", "concept_hook", "dailyLife", "daily_life", "dailyRoutine", "daily_routine", "hook", "concept", "premise",
+      ]) || "").trim(),
+      personalityCore: structuredPersonaText(candidateAliasValue(parsed, [
+        "personalityCore", "personality_core", "personality", "personalityEngine", "personality_engine",
+        "coreTraits", "core_traits", "corePersonality", "core_personality", "temperament", "personalityProfile", "personality_profile",
+      ])),
+      internalContradiction: String(candidateAliasValue(parsed, [
+        "internalContradiction", "internal_contradiction", "contradiction", "innerConflict", "inner_conflict", "internalConflict", "internal_conflict",
+      ]) || "").trim(),
+      relationshipSeed: String(candidateAliasValue(parsed, [
+        "relationshipSeed", "relationship_seed", "relationshipRoute", "relationship_route", "relationshipPath", "relationship_path",
+        "relationshipDynamic", "relationship_dynamic", "contactRoute", "contact_route",
+      ]) || "").trim(),
+      noveltyReason: String(weaknessValue ? (typeof weaknessValue === "string" ? weaknessValue : structuredPersonaText(weaknessValue)) : "").trim(),
     };
     if (!candidate.name || !candidate.role || !candidate.personalityCore) return null;
     return candidate;
   }
 
-  function normalizeRandomCandidateBundle(raw) {
+  function normalizeRandomCandidateBundle(raw, options = {}) {
     const parsed = parseJsonValueFlexible(raw);
-    const source = Array.isArray(parsed) ? parsed : asArray(parsed?.candidates);
+    const source = Array.isArray(parsed) ? parsed : asArray(parsed?.candidates || parsed?.candidateList || parsed?.candidate_list || parsed?.personas || parsed?.options);
+    const diagnostics = source.map((item, index) => randomCandidateParseDiagnostic(item, index));
     const seen = new Set();
-    return source.map((item) => normalizePersonaCandidate(item)).filter(Boolean).filter((item) => {
+    const candidates = source.map((item) => normalizePersonaCandidate(item)).filter(Boolean).filter((item) => {
       const key = `${item.name.toLowerCase()}|${item.role.toLowerCase()}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     }).slice(0, 3);
+    if (options?.logDiagnostics === true) {
+      appendDebugLog("generation", "random_candidate_parse", {
+        parsedTopLevelType: Array.isArray(parsed) ? "array" : (parsed && typeof parsed === "object" ? "object" : typeof parsed),
+        topLevelCandidates: source.length,
+        accepted: candidates.length,
+        rejected: diagnostics.filter((item) => !item.accepted),
+        acceptedAliases: diagnostics.filter((item) => item.accepted).map((item) => ({ index: item.index, aliasHits: item.aliasHits, keys: item.keys })),
+      }, candidates.length === 3 ? "info" : "warn");
+    }
+    return candidates;
   }
 
   function normalizeCharacterCandidate(raw) {
@@ -5616,19 +5741,21 @@ ${revisionText}`);
       ctx = { ...ctx, worldBlueprintKey: blueprintState.key, worldBlueprint: blueprintState.blueprint };
     }
     ctx = refreshPersonaLoreRerank(ctx);
+    const candidateStageMaxTokens = Math.min(4096, config.maxCompletionTokens || 4096);
+    appendDebugLog("generation", "random_candidates_request_config", { configuredMaxCompletionTokens: config.maxCompletionTokens, stageMaxTokens: candidateStageMaxTokens, timeoutMs: config.timeout }, "debug");
     const content = await callIndependentProvider(
       "You create three distinct lore-grounded RisuAI persona candidates. Return valid JSON only.",
       buildRandomCandidatePrompt({ ...ctx, randomConcept: preservedRandomConceptText, userRewriteGuidance: preservedUserRewriteGuidanceText }),
       config,
-      { jsonMode: true, jsonSchema: RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix: buildProviderSharedReference(ctx, "persona"), maxTokens: Math.min(4096, config.maxCompletionTokens || 4096) },
+      { jsonMode: true, jsonSchema: RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix: buildProviderSharedReference(ctx, "persona"), maxTokens: candidateStageMaxTokens },
     );
-    let candidates = normalizeRandomCandidateBundle(content);
+    let candidates = normalizeRandomCandidateBundle(content, { logDiagnostics: true });
     let repairContent = "";
     if (candidates.length !== 3) {
       appendDebugLog("generation", "random_candidates_schema_repair_start", { primaryCandidateCount: candidates.length, contentChars: content.length }, "warn");
       try {
         repairContent = await repairRandomCandidateOutput(content, config);
-        candidates = normalizeRandomCandidateBundle(repairContent);
+        candidates = normalizeRandomCandidateBundle(repairContent, { logDiagnostics: true });
         appendDebugLog("generation", "random_candidates_schema_repair_complete", { repairedCandidateCount: candidates.length, repairChars: repairContent.length }, candidates.length === 3 ? "info" : "warn");
       } catch (error) {
         appendDebugLog("generation", "random_candidates_schema_repair_failed", { primaryCandidateCount: candidates.length, error: errorForLog(error) }, "warn");
@@ -6193,7 +6320,7 @@ ${revisionText}`);
     if (typeof document === "undefined") return;
     const activeTab = document.querySelector(".dpg-tab-button.active[data-workspace-tab]");
     const activeName = String(activeTab?.getAttribute("data-workspace-tab") || "").trim();
-    if (["generate", "edit", "realtime", "vault", "settings"].includes(activeName)) activeWorkspaceTab = activeName;
+    if (["generate", "edit", "realtime", "assets", "vault", "settings"].includes(activeName)) activeWorkspaceTab = activeName;
     const layout = document.querySelector(".lia-app-layout");
     if (layout) {
       preservedWorldDrawerOpen = layout.classList.contains("world-drawer-open");
@@ -8236,7 +8363,7 @@ ${revisionText}`);
       [
         "Convert the supplied response into the exact canonical candidate shape below.",
         "Preserve the three existing candidate concepts. Do not invent a fourth candidate, replace an identity, or add unsupported world facts.",
-        "Map equivalent keys when obvious: personality -> personalityCore, daily_life -> conceptHook, relationship_route -> relationshipSeed.",
+        "Map equivalent keys when obvious: personality/personality_engine/core_personality/temperament -> personalityCore; daily_life/daily_routine/hook -> conceptHook; relationship_route/relationship_path/relationship_dynamic -> relationshipSeed; cost_vulnerability/vulnerability/weakness_cost/weakness/risk/drawback -> noveltyReason; species/race -> speciesRace.",
         "If a canonical field is absent, use an empty string instead of inventing content.",
         "The top-level value must be one object, never a bare array.",
         canonicalRandomCandidateJsonTemplate(),
@@ -9621,7 +9748,7 @@ ${revisionText}`);
     const savedVault = asArray(ctx.savedResultVault);
     const outputJson = llmResult ? resultToOutputText(llmResult) : "";
     const firstMessage = getFirstMessageText(ctx);
-    const currentTab = ["generate", "edit", "realtime", "vault", "settings"].includes(activeWorkspaceTab) ? activeWorkspaceTab : "generate";
+    const currentTab = ["generate", "edit", "realtime", "assets", "vault", "settings"].includes(activeWorkspaceTab) ? activeWorkspaceTab : "generate";
     if (!["persona", "prompt", "evolution", "audit", "history"].includes(preservedEditorSection)) preservedEditorSection = "persona";
     const charName = String(ctx.char?.name || "(unknown)");
     const chatName = String(ctx.chat?.name || `#${ctx.chatIndex + 1}`);
@@ -9663,6 +9790,7 @@ ${revisionText}`);
               <button id="dpg-tab-generate" class="dpg-tab-button ${currentTab === "generate" ? "active" : ""}" type="button" data-workspace-tab="generate" aria-label="생성" title="생성"><span class="lia-nav-icon" data-compact-label="생성">✦</span><span class="lia-nav-label">생성</span></button>
               <button id="dpg-tab-edit" class="dpg-tab-button ${currentTab === "edit" ? "active" : ""}" type="button" data-workspace-tab="edit" aria-label="편집" title="편집"><span class="lia-nav-icon" data-compact-label="편집">◇</span><span class="lia-nav-label">편집</span></button>
               <button id="dpg-tab-realtime" class="dpg-tab-button ${currentTab === "realtime" ? "active" : ""}" type="button" data-workspace-tab="realtime" aria-label="실시간 동기화" title="실시간 동기화"><span class="lia-nav-icon" data-compact-label="동기화">↻</span><span class="lia-nav-label">실시간</span></button>
+              <button id="dpg-tab-assets" class="dpg-tab-button ${currentTab === "assets" ? "active" : ""}" type="button" data-workspace-tab="assets" aria-label="감정 에셋" title="감정 에셋"><span class="lia-nav-icon" data-compact-label="에셋">🖼</span><span class="lia-nav-label">에셋</span></button>
               <button id="dpg-tab-vault" class="dpg-tab-button ${currentTab === "vault" ? "active" : ""}" type="button" data-workspace-tab="vault" aria-label="보관함" title="보관함"><span class="lia-nav-icon" data-compact-label="보관">▣</span><span class="lia-nav-label">보관함</span></button>
               <button id="dpg-tab-settings" class="dpg-tab-button ${currentTab === "settings" ? "active" : ""}" type="button" data-workspace-tab="settings" aria-label="AI 연결" title="AI 연결"><span class="lia-nav-icon" data-compact-label="AI">⚙</span><span class="lia-nav-label">AI 연결</span></button>
             </nav>
@@ -10111,6 +10239,10 @@ ${revisionText}`);
         </section>
       </section>
 
+      <section id="dpg-assets-panel" class="dpg-tab-panel ${currentTab === "assets" ? "active" : ""}" data-workspace-panel="assets">
+        ${renderAssetStudioPanel(ctx)}
+      </section>
+
       <section id="dpg-vault-panel" class="dpg-tab-panel ${currentTab === "vault" ? "active" : ""}" data-workspace-panel="vault">
         <section class="lia-page-hero"><span class="lia-section-eyebrow">PERSONA LIBRARY</span><h2>보관함</h2><p>생성 결과와 PersonaSpec, World Blueprint, Audit, Revision을 한 곳에서 관리합니다.</p></section>
         <section class="lia-panel lia-vault-page">
@@ -10131,6 +10263,9 @@ ${revisionText}`);
         <section class="lia-panel lia-provider-panel">
           ${renderProviderSettings(savedLLMConfig)}
         </section>
+        <section class="lia-panel lia-provider-panel">
+          ${renderIllustrationProviderSettings(ctx.savedIllustrationConfig || {})}
+        </section>
         <section class="lia-panel lia-log-panel">
           ${renderLogDiagnosticsPanel()}
         </section>
@@ -10139,6 +10274,2739 @@ ${revisionText}`);
         ${personaSidePanel}
       </div>
     `;
+  }
+
+
+  function normalizeIllustrationProviderType(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (["wellspring", "wellspring-nai", "chan-nai", "nai-compatible"].includes(raw)) return "wellspring-nai";
+    if (["novelai", "novelai-official", "nai-official"].includes(raw)) return "novelai";
+    if (["comfy", "comfyui", "comfyui-local", "local-comfy"].includes(raw)) return "comfyui-local";
+    if (["custom", "custom-json", "json"].includes(raw)) return "custom-json";
+    return "wellspring-nai";
+  }
+
+  function defaultIllustrationEndpointForProvider(provider) {
+    const type = normalizeIllustrationProviderType(provider);
+    if (type === "novelai") return "https://image.novelai.net/ai/generate-image";
+    if (type === "comfyui-local") return "http://127.0.0.1:8188";
+    if (type === "custom-json") return "";
+    return "https://wellspring.encrypt.gay/v1/images/nai/generate-image";
+  }
+
+  function normalizeIllustrationConfig(config = {}) {
+    const provider = normalizeIllustrationProviderType(config.provider || config.imageApiFormat || "wellspring-nai");
+    let normalizedModel = String(config.model || (provider === "comfyui-local" ? "" : "nai-diffusion-4-5-full")).trim();
+    let normalizedWorkflowJson = String(config.workflowJson || config.workflow || "").trim();
+    if (provider === "comfyui-local" && !normalizedWorkflowJson && looksLikeComfyWorkflowText(normalizedModel)) {
+      normalizedWorkflowJson = normalizedModel;
+      normalizedModel = "";
+    }
+    const toInt = (value, fallback, min, max) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return fallback;
+      return Math.max(min, Math.min(max, Math.floor(num)));
+    };
+    const toFloat = (value, fallback, min, max) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return fallback;
+      return Math.max(min, Math.min(max, num));
+    };
+    return {
+      version: ILLUSTRATION_CONFIG_VERSION,
+      enabled: config.enabled !== false,
+      provider,
+      endpoint: String(config.endpoint || config.url || defaultIllustrationEndpointForProvider(provider)).trim(),
+      apiKey: String(config.apiKey || config.key || "").trim(),
+      apiKeyHeader: ["authorization-bearer", "authorization-raw", "x-api-key", "none"].includes(String(config.apiKeyHeader || "").trim()) ? String(config.apiKeyHeader || "").trim() : (provider === "comfyui-local" || provider === "custom-json" ? "none" : "authorization-bearer"),
+      model: normalizedModel,
+      checkpoint: String(config.checkpoint || "").trim(),
+      width: toInt(config.width, 832, 256, 2048),
+      height: toInt(config.height, 1216, 256, 2048),
+      steps: toInt(config.steps, 28, 1, 150),
+      cfg: toFloat(config.cfg, 5.5, 1, 30),
+      sampler: String(config.sampler || "k_euler_ancestral").trim(),
+      seed: Number.isFinite(Number(config.seed)) ? Math.floor(Number(config.seed)) : -1,
+      timeoutMs: toInt(config.timeoutMs || config.timeout, 120000, 5000, 300000),
+      responsePath: String(config.responsePath || "data.0.image").trim(),
+      requestTemplateJson: String(config.requestTemplateJson || config.requestTemplate || "").trim(),
+      workflowJson: normalizedWorkflowJson,
+      headersJson: String(config.headersJson || "").trim(),
+      stylePrompt: String(config.stylePrompt || "clean polished anime character portrait, high quality, single character, standalone visual novel portrait asset").trim(),
+      negativePrompt: String(config.negativePrompt || "low quality, blurry, bad anatomy, extra fingers, multiple people, cropped face, deformed hands, duplicate limbs, text, watermark, logo").trim(),
+      extraNegativePrompt: String(config.extraNegativePrompt || "scenery, room, indoor background, outdoor background, landscape, detailed background, colored background, grey background, gray background, black background, gradient background, patterned background, objects in background, background characters, complex action pose").trim(),
+      transparentBackground: false,
+      runtimeAttachEnabled: config.runtimeAttachEnabled !== false,
+      runtimeNeutralFallback: config.runtimeNeutralFallback !== false,
+      runtimeMinScore: toFloat(config.runtimeMinScore, 2.0, 0.5, 20),
+      advancedJson: String(config.advancedJson || "").trim(),
+    };
+  }
+
+  function readIllustrationConfig() {
+    const intValue = (id, fallback) => {
+      const raw = Number(document.getElementById(id)?.value);
+      return Number.isFinite(raw) ? raw : fallback;
+    };
+    return normalizeIllustrationConfig({
+      enabled: document.getElementById("dpg-img-enabled")?.checked !== false,
+      provider: String(document.getElementById("dpg-img-provider")?.value || "wellspring-nai"),
+      endpoint: String(document.getElementById("dpg-img-endpoint")?.value || "").trim(),
+      apiKey: String(document.getElementById("dpg-img-key")?.value || "").trim(),
+      apiKeyHeader: String(document.getElementById("dpg-img-key-header")?.value || "authorization-bearer"),
+      model: String(document.getElementById("dpg-img-model")?.value || "").trim(),
+      checkpoint: String(document.getElementById("dpg-img-checkpoint")?.value || "").trim(),
+      width: intValue("dpg-img-width", 832),
+      height: intValue("dpg-img-height", 1216),
+      steps: intValue("dpg-img-steps", 28),
+      cfg: Number(document.getElementById("dpg-img-cfg")?.value || 5.5),
+      sampler: String(document.getElementById("dpg-img-sampler")?.value || "k_euler_ancestral").trim(),
+      seed: intValue("dpg-img-seed", -1),
+      timeoutMs: intValue("dpg-img-timeout", 120000),
+      responsePath: String(document.getElementById("dpg-img-response-path")?.value || "").trim(),
+      requestTemplateJson: String(document.getElementById("dpg-img-request-template")?.value || "").trim(),
+      workflowJson: String(document.getElementById("dpg-img-workflow")?.value || "").trim(),
+      headersJson: String(document.getElementById("dpg-img-headers")?.value || "").trim(),
+      stylePrompt: String(document.getElementById("dpg-img-style")?.value || "").trim(),
+      negativePrompt: String(document.getElementById("dpg-img-negative")?.value || "").trim(),
+      extraNegativePrompt: String(document.getElementById("dpg-img-extra-negative")?.value || "").trim(),
+      transparentBackground: false,
+      runtimeAttachEnabled: document.getElementById("dpg-img-runtime-attach")?.checked !== false,
+      runtimeNeutralFallback: document.getElementById("dpg-img-runtime-neutral")?.checked !== false,
+      runtimeMinScore: Number(document.getElementById("dpg-img-runtime-score")?.value || 2.0),
+      advancedJson: String(document.getElementById("dpg-img-advanced")?.value || "").trim(),
+    });
+  }
+
+  async function readStoredIllustrationConfig() {
+    try {
+      const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+      const raw = storage?.getItem ? await storage.getItem(ILLUSTRATION_CONFIG_STORAGE_KEY) : null;
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : (raw || {});
+      return normalizeIllustrationConfig(parsed);
+    } catch (_) {
+      return normalizeIllustrationConfig();
+    }
+  }
+
+  async function writeStoredIllustrationConfig(config) {
+    const normalized = normalizeIllustrationConfig(config);
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    if (!storage?.setItem) throw new Error("RisuAI pluginStorage가 아직 준비되지 않았습니다.");
+    await storage.setItem(ILLUSTRATION_CONFIG_STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
+  }
+
+  const VISUAL_WHITE_BACKGROUND_POSITIVE = "pure white background, plain white background, seamless white studio backdrop, isolated character on white";
+  const VISUAL_WHITE_BACKGROUND_NEGATIVE = "scenery, room, indoor background, outdoor background, landscape, cityscape, detailed background, colored background, grey background, gray background, black background, gradient background, patterned background, textured background, objects in background, background characters";
+  const VISUAL_SINGLE_DEPICTION_POSITIVE = "solo, single subject, one character, one standalone portrait, one visible face, centered single-subject composition";
+  const VISUAL_SINGLE_DEPICTION_NEGATIVE = "2girls, 2boys, multiple girls, multiple boys, multiple characters, group, duplicate character, duplicated person, cloned character, repeated character, twins, two faces, multiple faces, extra face, duplicate face, two heads, multiple heads, extra head, expression sheet, character sheet, sprite sheet, contact sheet, comparison sheet, reference sheet, turnaround sheet, lineup, collage, montage, tiled image, grid layout, storyboard, before and after, alternate view, multiple views, inset portrait, portrait within portrait, split screen, split panel, comic panel, manga panel, multiple panels, stacked portraits, top and bottom portraits";
+
+  function sanitizeAutomaticPositiveVisualPrompt(value) {
+    let text = String(value || "").trim();
+    if (!text) return "";
+    const replacements = [
+      [/reusable\s+visual\s+novel\s+expression\s+asset/gi, "standalone visual novel portrait asset"],
+      [/expression\s+sheet/gi, "standalone portrait"],
+      [/character\s+sheet/gi, "standalone portrait"],
+      [/sprite\s+sheet/gi, "standalone portrait"],
+      [/contact\s+sheet/gi, "standalone portrait"],
+      [/comparison\s+sheet/gi, "standalone portrait"],
+      [/reference\s+sheet/gi, "standalone portrait"],
+      [/multiple\s+views?/gi, "single portrait"],
+      [/alternate\s+views?/gi, "single portrait"],
+      [/split\s+(?:screen|panel)/gi, "single portrait"],
+      [/multiple\s+panels?/gi, "single portrait"],
+      [/camera\s+angle/gi, "view angle"],
+      [/camera\s+position/gi, "viewpoint"],
+      [/camera\s+framing/gi, "framing"],
+      [/consistent\s+waist-up\s+crop\s+and\s+camera/gi, "consistent waist-up framing and viewpoint"],
+    ];
+    for (const [pattern, replacement] of replacements) text = text.replace(pattern, replacement);
+    return text.replace(/\s*,\s*,+/g, ", ").replace(/\s{2,}/g, " ").trim();
+  }
+
+  function normalizeVisualCompositionPreset(value) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (["standard", "standard_waist_up", "waist_up", "waist-up"].includes(raw)) return "standard_waist_up";
+    if (["bust", "bust_close", "close", "close_up"].includes(raw)) return "bust_close";
+    if (["half_body", "half-body", "half"].includes(raw)) return "half_body";
+    return "standard_waist_up";
+  }
+
+  function visualCompositionPresetDefinition(value) {
+    const preset = normalizeVisualCompositionPreset(value);
+    const map = {
+      standard_waist_up: {
+        key: "standard_waist_up",
+        label: "표준 감정 에셋 · 상반신",
+        summary: "허리 위 상반신 · 중앙 · 정면/약한 3/4 · 손 최소",
+        prompt: "upper body, waist up, medium portrait, crop at the waist, torso and head visible, centered composition, front-facing or slight 3/4 view, fixed head position, fixed face scale, shoulders visible, simple posture, consistent waist-up framing and viewpoint",
+        negativePrompt: "full body, standing full body, entire body, feet, shoes, legs fully visible, knees, thighs fully visible, long shot, wide shot, distant character, extreme close-up, dynamic pose, action pose, dramatic angle, top-down view, low angle, dutch angle, off-center composition",
+      },
+      bust_close: {
+        key: "bust_close",
+        label: "얼굴 중심 에셋 · 흉상",
+        summary: "머리와 어깨 중심 흉상 · 중앙 · 손 없음",
+        prompt: "portrait, close-up portrait, head and shoulders, bust shot, crop below the shoulders or upper chest, face large in frame, centered composition, front-facing or slight 3/4 view, fixed head position, consistent close portrait crop, clear gender identity",
+        negativePrompt: "full body, half body, waist-up, torso fully visible, hips, legs, feet, shoes, hands visible, long shot, wide shot, zoomed out framing, dynamic pose, action pose, dramatic angle, off-center composition, gender drift",
+      },
+      half_body: {
+        key: "half_body",
+        label: "반신 에셋 · 반신",
+        summary: "허리~허벅지 중간까지 · 중앙 · 자세 약간 허용",
+        prompt: "half body, cowboy shot, medium-long portrait, crop around mid-thigh, head torso waist hips and upper thighs visible, centered composition, front-facing or slight 3/4 view, fixed head position, consistent body scale, simple posture, minimal hand emphasis, consistent half-body framing and viewpoint",
+        negativePrompt: "full body, entire body, feet, shoes, lower legs fully visible, long shot, wide shot, distant character, extreme close-up, bust close-up, waist-up crop, dynamic pose, action pose, dramatic angle, off-center composition, running pose",
+      },
+    };
+    return map[preset] || map.standard_waist_up;
+  }
+
+  function currentVisualCompositionChoice() {
+    const preset = normalizeVisualCompositionPreset(document.getElementById("dpg-asset-composition-preset")?.value || preservedVisualCompositionPreset || "standard_waist_up");
+    const notes = String(document.getElementById("dpg-asset-composition-notes")?.value || preservedVisualCompositionNotes || "").trim();
+    preservedVisualCompositionPreset = preset;
+    preservedVisualCompositionNotes = notes;
+    return { preset, notes, definition: visualCompositionPresetDefinition(preset) };
+  }
+
+  function normalizeVisualGenerationLock(lock = null, options = {}) {
+    if (!lock || typeof lock !== "object") return null;
+    const confirmed = options.confirmed === true || lock.confirmed === true;
+    const normalized = {
+      schema: "lia.visual_generation_lock.v1",
+      confirmed,
+      provider: normalizeIllustrationProviderType(lock.provider || "wellspring-nai"),
+      model: String(lock.model || "").trim(),
+      checkpoint: String(lock.checkpoint || "").trim(),
+      width: Math.max(256, Math.floor(Number(lock.width) || 832)),
+      height: Math.max(256, Math.floor(Number(lock.height) || 1216)),
+      steps: Math.max(1, Math.floor(Number(lock.steps) || 28)),
+      cfg: Math.max(1, Number(lock.cfg) || 5.5),
+      sampler: String(lock.sampler || "k_euler_ancestral").trim(),
+      seed: Math.max(0, Math.floor(Number(lock.seed) || 0)),
+      identityPrompt: String(lock.identityPrompt || "").trim(),
+      stylePrompt: String(lock.stylePrompt || "").trim(),
+      backgroundPrompt: String(lock.backgroundPrompt || VISUAL_WHITE_BACKGROUND_POSITIVE).trim(),
+      negativePrompt: String(lock.negativePrompt || "").trim(),
+      extraNegativePrompt: String(lock.extraNegativePrompt || VISUAL_WHITE_BACKGROUND_NEGATIVE).trim(),
+      styleNotes: String(lock.styleNotes || "").trim(),
+      compositionPreset: normalizeVisualCompositionPreset(lock.compositionPreset || "standard_waist_up"),
+      compositionPrompt: String(lock.compositionPrompt || visualCompositionPresetDefinition(lock.compositionPreset || "standard_waist_up").prompt).trim(),
+      compositionNegativePrompt: String(lock.compositionNegativePrompt || visualCompositionPresetDefinition(lock.compositionPreset || "standard_waist_up").negativePrompt).trim(),
+      compositionNotes: String(lock.compositionNotes || "").trim(),
+      advancedJson: String(lock.advancedJson || "").trim(),
+      workflowHash: String(lock.workflowHash || "").trim(),
+      requestTemplateHash: String(lock.requestTemplateHash || "").trim(),
+      createdAt: String(lock.createdAt || new Date().toISOString()),
+      lockedAt: confirmed ? String(lock.lockedAt || new Date().toISOString()) : "",
+    };
+    normalized.lockHash = String(lock.lockHash || hashText(JSON.stringify({
+      provider: normalized.provider,
+      model: normalized.model,
+      checkpoint: normalized.checkpoint,
+      width: normalized.width,
+      height: normalized.height,
+      steps: normalized.steps,
+      cfg: normalized.cfg,
+      sampler: normalized.sampler,
+      seed: normalized.seed,
+      identityPrompt: normalized.identityPrompt,
+      stylePrompt: normalized.stylePrompt,
+      backgroundPrompt: normalized.backgroundPrompt,
+      negativePrompt: normalized.negativePrompt,
+      extraNegativePrompt: normalized.extraNegativePrompt,
+      styleNotes: normalized.styleNotes,
+      compositionPreset: normalized.compositionPreset,
+      compositionPrompt: normalized.compositionPrompt,
+      compositionNegativePrompt: normalized.compositionNegativePrompt,
+      compositionNotes: normalized.compositionNotes,
+      advancedJson: normalized.advancedJson,
+      workflowHash: normalized.workflowHash,
+      requestTemplateHash: normalized.requestTemplateHash,
+    }))).trim();
+    return normalized;
+  }
+
+  function visualGenerationLockSeed(target, config) {
+    if (Number.isFinite(Number(config?.seed)) && Number(config.seed) >= 0) return Math.floor(Number(config.seed));
+    return numericHash(String(target?.personaKey || target?.personaId || target?.personaName || "lia-persona")) % 2147483647;
+  }
+
+  function inferVisualGenderProfile(target) {
+    const spec = target?.personaSpec || {};
+    const facts = target?.facts || {};
+    const explicit = String(spec.gender || facts.gender || "").trim().toLowerCase();
+    const promptRaw = String(target?.personaPrompt || "").trim().toLowerCase();
+    const hasWord = (value, word) => new RegExp(`(^|[^a-z])${word}([^a-z]|$)`, "i").test(String(value || ""));
+    const explicitMale = hasWord(explicit, "male") || hasWord(explicit, "man") || hasWord(explicit, "boy") || /남성|남자|소년/.test(explicit);
+    const explicitFemale = hasWord(explicit, "female") || hasWord(explicit, "woman") || hasWord(explicit, "girl") || /여성|여자|소녀/.test(explicit);
+    let key = "unknown";
+    if (explicitMale && !explicitFemale) key = "male";
+    else if (explicitFemale && !explicitMale) key = "female";
+    else if (!explicit) {
+      const promptMale = hasWord(promptRaw, "male") || hasWord(promptRaw, "man") || hasWord(promptRaw, "boy") || /남성|남자|소년/.test(promptRaw);
+      const promptFemale = hasWord(promptRaw, "female") || hasWord(promptRaw, "woman") || hasWord(promptRaw, "girl") || /여성|여자|소녀/.test(promptRaw);
+      if (promptMale && !promptFemale) key = "male";
+      else if (promptFemale && !promptMale) key = "female";
+    }
+    if (key === "male") {
+      return {
+        key: "male",
+        positiveTags: "1boy, male focus, male, young man, single male character, flat chest, masculine torso, masculine shoulders, masculine neck, masculine face, no breasts",
+        negativeTags: "1girl, girl, female, woman, feminine body, feminine face, breasts, cleavage, curvy body, wide hips, feminine eyelashes, camisole, spaghetti straps, bra top",
+        clothingHint: "simple casual masculine top, plain t-shirt or casual shirt",
+      };
+    }
+    if (key === "female") {
+      return {
+        key: "female",
+        positiveTags: "1girl, female focus, female, young woman, single female character, feminine face, feminine torso",
+        negativeTags: "1boy, boy, male, man, masculine body, masculine face, facial hair, broad masculine shoulders",
+        clothingHint: "simple casual feminine top or shirt",
+      };
+    }
+    return { key: "unknown", positiveTags: "", negativeTags: "", clothingHint: "" };
+  }
+
+  function neutralExpressionNegativeTags(emotion) {
+    const raw = String(emotion || "").trim().toLowerCase();
+    if (raw !== "neutral") return "";
+    return "worried expression, troubled expression, embarrassed expression, sad expression, pout, frown, wavy mouth, puckered lips, anxious eyes, teary eyes, surprised expression, smile, grin, blush, open mouth, downturned mouth, quivering mouth";
+  }
+
+  function summarizeVisualTargetForDebug(target) {
+    const spec = target?.personaSpec || {};
+    const facts = target?.facts || {};
+    const genderProfile = inferVisualGenderProfile(target);
+    return {
+      personaKey: String(target?.personaKey || "").trim(),
+      personaId: String(target?.personaId || "").trim(),
+      personaName: String(target?.personaName || "").trim(),
+      sourceType: String(target?.sourceType || "").trim(),
+      assetPrefix: String(target?.assetPrefix || "").trim(),
+      explicitGender: String(spec.gender || facts.gender || "").trim(),
+      resolvedGender: String(genderProfile?.key || "unknown").trim() || "unknown",
+      resolvedPositiveTags: String(genderProfile?.positiveTags || "").trim(),
+      resolvedNegativeTags: String(genderProfile?.negativeTags || "").trim(),
+      identitySummary: String(target?.identitySummary || "").trim(),
+    };
+  }
+
+  function buildVisualIdentityPrompt(target) {
+    const spec = target?.personaSpec || {};
+    const facts = target?.facts || {};
+    const appearance = spec.appearance || facts.appearanceDigest || facts.sourceDigest || "";
+    const role = spec.role || "";
+    const genderProfile = inferVisualGenderProfile(target);
+    const appearanceLower = String(appearance || "").toLowerCase();
+    const hasClothingCue = /(shirt|t-shirt|tee|hoodie|jacket|coat|uniform|sweater|blouse|dress|skirt|pants|jeans|shorts|outfit|복장|옷|셔츠|후드|재킷|자켓|교복)/i.test(appearanceLower);
+    return [
+      `single character portrait asset of ${target?.personaName || "Persona"}`,
+      genderProfile.positiveTags,
+      spec.gender || facts.gender || "",
+      spec.age || facts.age || "",
+      spec.speciesRace || facts.species || "",
+      role ? `role: ${role}` : "",
+      appearance ? `appearance: ${appearance}` : "",
+      !hasClothingCue && genderProfile.clothingHint ? genderProfile.clothingHint : "",
+      "same character identity, same face shape, same hairstyle, same hair color, same eye color, same outfit, same outfit colors, same body proportions, same framing",
+      "clean readable face, standalone visual novel portrait asset, composition follows the selected composition preset",
+    ].filter(Boolean).join(", ");
+  }
+
+  function createVisualGenerationLockCandidate(target, config) {
+    const styleNotes = String(document.getElementById("dpg-asset-style-notes")?.value || preservedVisualStyleNotes || "").trim();
+    preservedVisualStyleNotes = styleNotes;
+    const compositionChoice = currentVisualCompositionChoice();
+    return normalizeVisualGenerationLock({
+      confirmed: false,
+      provider: config.provider,
+      model: config.model,
+      checkpoint: config.checkpoint,
+      width: config.width,
+      height: config.height,
+      steps: config.steps,
+      cfg: config.cfg,
+      sampler: config.sampler,
+      seed: visualGenerationLockSeed(target, config),
+      identityPrompt: buildVisualIdentityPrompt(target),
+      stylePrompt: config.stylePrompt,
+      backgroundPrompt: VISUAL_WHITE_BACKGROUND_POSITIVE,
+      negativePrompt: config.negativePrompt,
+      extraNegativePrompt: [config.extraNegativePrompt, VISUAL_WHITE_BACKGROUND_NEGATIVE].filter(Boolean).join(", "),
+      styleNotes,
+      compositionPreset: compositionChoice.preset,
+      compositionPrompt: compositionChoice.definition.prompt,
+      compositionNegativePrompt: compositionChoice.definition.negativePrompt,
+      compositionNotes: compositionChoice.notes,
+      advancedJson: config.advancedJson,
+      workflowHash: hashText(String(config.workflowJson || "")),
+      requestTemplateHash: hashText(String(config.requestTemplateJson || "")),
+      createdAt: new Date().toISOString(),
+    }, { confirmed: false });
+  }
+
+  function lockedIllustrationConfig(currentConfig, lock) {
+    const normalizedLock = normalizeVisualGenerationLock(lock, { confirmed: true });
+    if (!normalizedLock?.confirmed) throw new Error("Neutral Visual Generation Lock이 확정되지 않았습니다.");
+    const current = normalizeIllustrationConfig(currentConfig || {});
+    if (normalizeIllustrationProviderType(current.provider) !== normalizedLock.provider) {
+      throw new Error(`Neutral 기준 Provider(${normalizedLock.provider})와 현재 Provider(${current.provider})가 다릅니다. 기준을 다시 만들거나 Provider를 되돌려 주세요.`);
+    }
+    if (normalizedLock.provider === "comfyui-local" && normalizedLock.workflowHash !== hashText(String(current.workflowJson || ""))) {
+      throw new Error("Neutral 기준 확정 후 ComfyUI workflow가 변경되었습니다. 동일성 유지를 위해 Neutral 기준을 다시 만들어 주세요.");
+    }
+    if (normalizedLock.provider === "custom-json" && normalizedLock.requestTemplateHash !== hashText(String(current.requestTemplateJson || ""))) {
+      throw new Error("Neutral 기준 확정 후 Custom JSON template이 변경되었습니다. Neutral 기준을 다시 만들어 주세요.");
+    }
+    return normalizeIllustrationConfig({
+      ...current,
+      provider: normalizedLock.provider,
+      model: normalizedLock.model,
+      checkpoint: normalizedLock.checkpoint,
+      width: normalizedLock.width,
+      height: normalizedLock.height,
+      steps: normalizedLock.steps,
+      cfg: normalizedLock.cfg,
+      sampler: normalizedLock.sampler,
+      seed: normalizedLock.seed,
+      stylePrompt: normalizedLock.stylePrompt,
+      negativePrompt: normalizedLock.negativePrompt,
+      extraNegativePrompt: normalizedLock.extraNegativePrompt,
+      transparentBackground: false,
+      advancedJson: normalizedLock.advancedJson,
+    });
+  }
+
+  function normalizeVisualAssetEntry(entry = {}, fallbackEmotion = "") {
+    return {
+      emotion: String(entry.emotion || fallbackEmotion || "neutral").trim() || "neutral",
+      assetPath: String(entry.assetPath || "").trim(),
+      assetName: String(entry.assetName || entry.emotion || fallbackEmotion || "emotion").trim(),
+      prompt: String(entry.prompt || "").trim(),
+      negativePrompt: String(entry.negativePrompt || "").trim(),
+      provider: normalizeIllustrationProviderType(entry.provider || "wellspring-nai"),
+      mime: String(entry.mime || "").trim(),
+      seed: Number.isFinite(Number(entry.seed)) ? Math.floor(Number(entry.seed)) : -1,
+      width: Number.isFinite(Number(entry.width)) ? Math.floor(Number(entry.width)) : 0,
+      height: Number.isFinite(Number(entry.height)) ? Math.floor(Number(entry.height)) : 0,
+      generatedAt: String(entry.generatedAt || new Date().toISOString()),
+      isAnchor: entry.isAnchor === true,
+      previewText: String(entry.previewText || entry.emotion || fallbackEmotion || "").trim(),
+      lockHash: String(entry.lockHash || "").trim(),
+      backupId: String(entry.backupId || "").trim(),
+      backupBytes: Number.isFinite(Number(entry.backupBytes)) ? Math.max(0, Math.floor(Number(entry.backupBytes))) : 0,
+      generationSnapshot: normalizeVisualGenerationLock(entry.generationSnapshot || null, { confirmed: false }),
+    };
+  }
+
+  function normalizeVisualAssetSet(set = {}, key = "") {
+    const images = {};
+    const rawImages = set.images && typeof set.images === "object" ? set.images : {};
+    Object.entries(rawImages).forEach(([emotion, value]) => {
+      const normalized = normalizeVisualAssetEntry(value, emotion);
+      if (normalized.assetPath) images[normalized.emotion] = normalized;
+    });
+    const anchorEmotion = "neutral";
+    Object.values(images).forEach((item) => { item.isAnchor = item.emotion === "neutral"; });
+    return {
+      personaKey: String(set.personaKey || key || "").trim(),
+      personaId: String(set.personaId || "").trim(),
+      personaName: String(set.personaName || "Persona").trim() || "Persona",
+      assetPrefix: String(set.assetPrefix || "").trim(),
+      sourceType: String(set.sourceType || "persona").trim(),
+      updatedAt: String(set.updatedAt || new Date().toISOString()),
+      identityHash: String(set.identityHash || "").trim(),
+      anchorEmotion,
+      identitySummary: String(set.identitySummary || "").trim(),
+      promptBasis: String(set.promptBasis || "").trim(),
+      visualLockCandidate: normalizeVisualGenerationLock(set.visualLockCandidate || null, { confirmed: false }),
+      visualLock: normalizeVisualGenerationLock(set.visualLock || null, { confirmed: true }),
+      images,
+    };
+  }
+
+  function normalizePersonaVisualAssetStore(raw = {}) {
+    const sets = {};
+    const sourceSets = raw && typeof raw === "object" && raw.sets && typeof raw.sets === "object" ? raw.sets : {};
+    Object.entries(sourceSets).forEach(([key, value]) => {
+      const normalized = normalizeVisualAssetSet(value, key);
+      if (normalized.personaKey) sets[normalized.personaKey] = normalized;
+    });
+    return {
+      version: PERSONA_VISUAL_ASSET_VERSION,
+      updatedAt: String(raw.updatedAt || new Date().toISOString()),
+      sets,
+    };
+  }
+
+  async function readPersonaVisualAssetStore() {
+    try {
+      const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+      const raw = storage?.getItem ? await storage.getItem(PERSONA_VISUAL_ASSET_STORAGE_KEY) : null;
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : (raw || {});
+      return normalizePersonaVisualAssetStore(parsed);
+    } catch (_) {
+      return normalizePersonaVisualAssetStore();
+    }
+  }
+
+  async function writePersonaVisualAssetStore(store) {
+    const normalized = normalizePersonaVisualAssetStore(store);
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    if (!storage?.setItem) throw new Error("RisuAI pluginStorage가 아직 준비되지 않았습니다.");
+    await storage.setItem(PERSONA_VISUAL_ASSET_STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
+  }
+
+  function visualAssetBackupIdForKey(personaKey, emotion) {
+    const seed = `${String(personaKey || "persona").trim()}::${String(emotion || "neutral").trim().toLowerCase()}`;
+    return `asset-${hashText(seed).replace(/[^a-zA-Z0-9_-]+/g, "_")}`;
+  }
+
+  function visualAssetBackupManifestKey(backupId) {
+    return `${PERSONA_VISUAL_ASSET_BACKUP_PREFIX}${String(backupId || "").trim()}::manifest`;
+  }
+
+  function visualAssetBackupChunkKey(backupId, index) {
+    return `${PERSONA_VISUAL_ASSET_BACKUP_PREFIX}${String(backupId || "").trim()}::chunk::${index}`;
+  }
+
+  function uint8ArrayToBase64(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    const chunkSize = 0x8000;
+    let binary = "";
+    for (let i = 0; i < data.length; i += chunkSize) {
+      binary += String.fromCharCode(...data.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  async function visualAssetDataToBytes(data) {
+    if (!data) return null;
+    if (data instanceof Uint8Array) return data;
+    if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(data)) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    }
+    if (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (typeof Blob !== "undefined" && data instanceof Blob) return new Uint8Array(await data.arrayBuffer());
+    if (typeof data === "string") {
+      if (/^data:image\//i.test(data) || /^[A-Za-z0-9+/=\s]{800,}$/.test(data)) return base64ToUint8Array(data);
+    }
+    return null;
+  }
+
+  async function readVisualAssetBackupManifest(backupId, storageOverride = null) {
+    const id = String(backupId || "").trim();
+    if (!id) return null;
+    const storage = storageOverride || await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    const raw = storage?.getItem ? await storage.getItem(visualAssetBackupManifestKey(id)) : null;
+    if (!raw) return null;
+    try {
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      if (!parsed || Number(parsed.version || 0) !== PERSONA_VISUAL_ASSET_BACKUP_VERSION) return null;
+      return parsed;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function writePersonaVisualAssetBackup(backupId, bytes, mime = "image/png") {
+    const id = String(backupId || "").trim();
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    if (!id || !data.length) throw new Error("에셋 백업 데이터가 비어 있습니다.");
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 6000, intervalMs: 250 });
+    if (!storage?.setItem || !storage?.getItem) throw new Error("RisuAI pluginStorage가 아직 준비되지 않았습니다.");
+    const oldManifest = await readVisualAssetBackupManifest(id, storage);
+    const base64 = uint8ArrayToBase64(data);
+    const chunks = Math.max(1, Math.ceil(base64.length / PERSONA_VISUAL_ASSET_BACKUP_CHUNK_CHARS));
+    for (let i = 0; i < chunks; i += 1) {
+      const part = base64.slice(i * PERSONA_VISUAL_ASSET_BACKUP_CHUNK_CHARS, (i + 1) * PERSONA_VISUAL_ASSET_BACKUP_CHUNK_CHARS);
+      await storage.setItem(visualAssetBackupChunkKey(id, i), part);
+    }
+    await storage.setItem(visualAssetBackupManifestKey(id), JSON.stringify({
+      version: PERSONA_VISUAL_ASSET_BACKUP_VERSION,
+      mime: String(mime || "image/png"),
+      bytes: data.length,
+      base64Chars: base64.length,
+      chunks,
+      savedAt: new Date().toISOString(),
+    }));
+    const oldChunks = Math.max(0, Number(oldManifest?.chunks || 0));
+    if (storage?.removeItem && oldChunks > chunks) {
+      for (let i = chunks; i < oldChunks; i += 1) {
+        try { await storage.removeItem(visualAssetBackupChunkKey(id, i)); } catch (_) {}
+      }
+    }
+    appendDebugLog("persona_visual", "image_asset_backup_saved", { backupId: id, bytes: data.length, chunks }, "debug");
+    return { backupId: id, bytes: data.length, chunks };
+  }
+
+  async function readPersonaVisualAssetBackup(backupId) {
+    const id = String(backupId || "").trim();
+    if (!id) return null;
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 6000, intervalMs: 250 });
+    const manifest = await readVisualAssetBackupManifest(id, storage);
+    if (!manifest) return null;
+    let base64 = "";
+    const chunks = Math.max(0, Number(manifest.chunks || 0));
+    for (let i = 0; i < chunks; i += 1) {
+      const part = await storage.getItem(visualAssetBackupChunkKey(id, i));
+      if (typeof part !== "string" || !part) throw new Error(`에셋 백업 청크가 누락되었습니다: ${i + 1}/${chunks}`);
+      base64 += part;
+    }
+    const bytes = base64ToUint8Array(base64);
+    if (!bytes?.length) throw new Error("에셋 백업 base64 복원에 실패했습니다.");
+    appendDebugLog("persona_visual", "image_asset_backup_loaded", { backupId: id, bytes: bytes.length, chunks }, "debug");
+    return { bytes, mime: String(manifest.mime || "image/png"), manifest };
+  }
+
+  async function removePersonaVisualAssetBackup(backupId) {
+    const id = String(backupId || "").trim();
+    if (!id) return false;
+    try {
+      const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+      const manifest = await readVisualAssetBackupManifest(id, storage);
+      const chunks = Math.max(0, Number(manifest?.chunks || 0));
+      if (storage?.removeItem) {
+        for (let i = 0; i < chunks; i += 1) {
+          try { await storage.removeItem(visualAssetBackupChunkKey(id, i)); } catch (_) {}
+        }
+        try { await storage.removeItem(visualAssetBackupManifestKey(id)); } catch (_) {}
+      }
+      appendDebugLog("persona_visual", "image_asset_backup_removed", { backupId: id, chunks }, "debug");
+      return true;
+    } catch (error) {
+      appendDebugLog("persona_visual", "image_asset_backup_remove_failed", { backupId: id, error: errorForLog(error) }, "warn");
+      return false;
+    }
+  }
+
+  async function updatePersonaVisualAssetRecoveryMetadata({ personaKey, emotion, backupId, assetPath, backupBytes = 0 }) {
+    const key = String(personaKey || "").trim();
+    const emo = String(emotion || "").trim();
+    const bid = String(backupId || "").trim();
+    const path = String(assetPath || "").trim();
+    if (!emo || (!key && !bid)) return false;
+    const store = await readPersonaVisualAssetStore();
+    let changed = false;
+    for (const [setKey, rawSet] of Object.entries(store.sets || {})) {
+      if (key && setKey !== key && String(rawSet?.personaKey || "").trim() !== key) {
+        const candidate = rawSet?.images?.[emo];
+        if (!bid || String(candidate?.backupId || "").trim() !== bid) continue;
+      }
+      const set = normalizeVisualAssetSet(rawSet, setKey);
+      const entry = set.images?.[emo];
+      if (!entry) continue;
+      if (bid && entry.backupId && entry.backupId !== bid) continue;
+      if (bid) entry.backupId = bid;
+      if (backupBytes) entry.backupBytes = backupBytes;
+      if (path) entry.assetPath = path;
+      set.updatedAt = new Date().toISOString();
+      store.sets[setKey] = set;
+      changed = true;
+      break;
+    }
+    if (changed) await writePersonaVisualAssetStore({ ...store, updatedAt: new Date().toISOString() });
+    return changed;
+  }
+
+  function buildPersonaSpecFromFacts(facts = {}) {
+    // Asset Studio must also support ordinary RisuAI Personas that do not satisfy
+    // LIA's canonical generated-Persona requirements (for example, no explicit
+    // role/personality section). normalizePersonaSpec intentionally rejects those
+    // incomplete generation objects, so fall back to the source-grounded draft
+    // instead of returning null and crashing the preview.
+    const draft = {
+      name: facts.name || "Persona",
+      gender: facts.gender || "",
+      age: facts.age || "",
+      speciesRace: facts.species || "",
+      origin: facts.nationality || "",
+      role: "",
+      appearance: facts.appearanceDigest || facts.sourceDigest || "",
+      personality: facts.emotionalDigest || facts.relationshipDigest || "",
+      visibleSide: facts.relationshipDigest || "",
+      hiddenSide: facts.shameDigest || facts.fearDigest || "",
+      internalContradiction: facts.prideDigest || facts.shameDigest || "",
+      background: facts.backgroundDigest || "",
+      speech: facts.speechDigest || "",
+      motivation: facts.desireDigest || "",
+      relationshipStyle: facts.relationshipDigest || "",
+      relationshipToCharacter: "",
+      preferences: facts.dailyRoutineDigest || "",
+      conflictRepair: facts.apologyStyleDigest || "",
+      skills: normalizeStringArray(facts.traits || []),
+      limitations: normalizeStringArray([facts.boundaryDigest || ""].filter(Boolean)),
+      knowledgeBoundary: "",
+      boundaries: [],
+      worldFitNotes: [],
+    };
+    return normalizePersonaSpec(draft) || draft;
+  }
+
+  function personaAssetPrefix(name, personaId = "") {
+    const normalized = String(name || "persona")
+      .normalize("NFKC")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^\p{L}\p{N}_-]+/gu, "")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48);
+    return normalized || `persona_${hashText(personaId || name || "persona").split("-")[0]}`;
+  }
+
+  function emotionAssetSlug(emotion) {
+    const normalized = String(emotion || "neutral")
+      .normalize("NFKC")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_")
+      .replace(/[^\p{L}\p{N}_-]+/gu, "")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 48);
+    return normalized || "neutral";
+  }
+
+  function numericHash(value) {
+    const source = String(value || "");
+    let hash = 2166136261;
+    for (let i = 0; i < source.length; i += 1) {
+      hash ^= source.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  function currentVisualTargetSelectionValue() {
+    const raw = String(preservedVisualTargetPersonaId || "").trim();
+    return raw || "__auto__";
+  }
+
+  function listSelectablePersonaVisualTargets(ctx = {}) {
+    const personas = asArray(ctx?.db?.personas)
+      .filter((item) => item && String(item.id || "").trim())
+      .slice()
+      .sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), "ko"));
+    const currentPersona = ctx?.personaInfo?.persona || {};
+    const llmResult = getLLMResultOverride();
+    const llmName = String(llmResult?.personaName || preservedGeneratedPersonaNameText || "LIA Persona").trim() || "LIA Persona";
+    const items = [{
+      value: "__auto__",
+      label: currentPersona?.id ? `현재 Source Persona 자동 · ${String(currentPersona.name || "Persona")}` : "현재 Source Persona 자동",
+      kind: "auto",
+    }];
+    if (llmResult?.personaPrompt) {
+      items.push({
+        value: "__lia_result__",
+        label: `현재 LIA 결과 · ${llmName}`,
+        kind: "lia_result",
+      });
+    }
+    personas.forEach((persona) => {
+      items.push({
+        value: `persona:${String(persona.id || "").trim()}`,
+        label: String(persona.name || "Persona").trim() || "Persona",
+        kind: "persona",
+        personaId: String(persona.id || "").trim(),
+      });
+    });
+    return items;
+  }
+
+  function resolvePersonaVisualTarget(ctx = {}) {
+    const llmResult = getLLMResultOverride();
+    const selectedValue = currentVisualTargetSelectionValue();
+    let sourceType = "source_persona";
+    let personaName = "Persona";
+    let personaPrompt = "";
+    let personaSpec = null;
+    let personaId = "";
+    if (selectedValue === "__lia_result__" && llmResult?.personaPrompt) {
+      sourceType = "lia_result";
+      const activeProfile = normalizePersonaVariantProfile(llmResult.activePersonaProfile || preservedPersonaVariantProfile);
+      const variants = normalizePersonaVariants(llmResult.personaVariants, llmResult.personaPrompt);
+      personaPrompt = String(variants[activeProfile] || llmResult.personaPrompt || "").trim();
+      personaSpec = normalizePersonaSpec(llmResult.personaSpec || null);
+      personaName = String(llmResult.personaName || personaSpec?.name || preservedGeneratedPersonaNameText || "LIA Persona").trim() || "LIA Persona";
+      const existing = findExistingGeneratedPersonaForResult(ctx, llmResult);
+      personaId = String(existing?.id || "").trim();
+    } else if (selectedValue.startsWith("persona:")) {
+      const wantedId = selectedValue.slice("persona:".length).trim();
+      const persona = asArray(ctx?.db?.personas).find((item) => String(item?.id || "").trim() === wantedId) || {};
+      sourceType = "persona_picker";
+      personaId = String(persona.id || wantedId).trim();
+      personaName = String(persona.name || "Persona").trim() || "Persona";
+      personaPrompt = String(persona.personaPrompt || persona.prompt || persona.description || persona.desc || persona.note || "").trim();
+    } else if (llmResult?.personaPrompt && selectedValue === "__auto__" && !ctx?.personaInfo?.persona?.id) {
+      sourceType = "lia_result";
+      const activeProfile = normalizePersonaVariantProfile(llmResult.activePersonaProfile || preservedPersonaVariantProfile);
+      const variants = normalizePersonaVariants(llmResult.personaVariants, llmResult.personaPrompt);
+      personaPrompt = String(variants[activeProfile] || llmResult.personaPrompt || "").trim();
+      personaSpec = normalizePersonaSpec(llmResult.personaSpec || null);
+      personaName = String(llmResult.personaName || personaSpec?.name || preservedGeneratedPersonaNameText || "LIA Persona").trim() || "LIA Persona";
+      const existing = findExistingGeneratedPersonaForResult(ctx, llmResult);
+      personaId = String(existing?.id || "").trim();
+    } else {
+      const persona = ctx.personaInfo?.persona || {};
+      personaId = String(persona.id || "").trim();
+      personaName = String(persona.name || "Persona").trim() || "Persona";
+      personaPrompt = String(persona.personaPrompt || persona.prompt || persona.description || "").trim();
+    }
+    const facts = inferPersonaFacts({ name: personaName, personaPrompt });
+    if (!personaSpec) personaSpec = buildPersonaSpecFromFacts(facts);
+    if (!personaSpec || typeof personaSpec !== "object") personaSpec = {};
+    const identitySummary = [
+      personaSpec?.gender || facts.gender,
+      personaSpec?.age || facts.age,
+      personaSpec?.speciesRace || facts.species,
+      personaSpec?.role || "",
+      personaSpec?.appearance || facts.appearanceDigest,
+      personaSpec?.personality || facts.emotionalDigest,
+    ].filter(Boolean).join(" · ");
+    const promptBasis = [personaName, personaPrompt, identitySummary].join("\n");
+    const legacyPersonaKey = `visual:${hashText(promptBasis)}`;
+    const draftIdentity = String(llmResult?.generationId || llmResult?.personaLineage?.lineageId || hashText(promptBasis)).trim();
+    const personaKey = personaId ? `persona:${personaId}` : `draft:${draftIdentity}`;
+    const store = normalizePersonaVisualAssetStore(ctx.visualAssetStore || {});
+    const sameNameSets = Object.entries(store.sets || {}).filter(([, set]) => String(set?.personaName || "").trim().toLowerCase() === personaName.toLowerCase() && Object.keys(set?.images || {}).length);
+    const fallbackPersonaKey = sameNameSets.length === 1 ? sameNameSets[0][0] : "";
+    const bundle = store.sets[personaKey] || store.sets[legacyPersonaKey] || (fallbackPersonaKey ? store.sets[fallbackPersonaKey] : null) || null;
+    const assetPrefix = personaAssetPrefix(personaName, personaId || draftIdentity);
+    return {
+      personaKey,
+      legacyPersonaKey,
+      fallbackPersonaKey,
+      personaId,
+      assetPrefix,
+      personaName,
+      sourceType,
+      personaPrompt,
+      personaSpec,
+      facts,
+      identitySummary,
+      promptBasis,
+      bundle,
+      displaySource: sourceType === "lia_result" ? (personaId ? "현재 LIA 결과 · 저장된 Persona" : "현재 LIA 결과 · 초안") : sourceType === "persona_picker" ? "사용자 지정 Persona" : "현재 Source Persona",
+    };
+  }
+
+  function visualEmotionDirections(label) {
+    const raw = String(label || "neutral").trim().toLowerCase();
+    const map = {
+      neutral: "neutral expression, calm face, relaxed eyebrows, closed relaxed mouth, straight natural mouth line, soft steady gaze, emotionally even expression",
+      "gentle smile": "small warm smile, kind eyes, soft expression",
+      happy: "bright happy smile, lively eyes, cheerful mood, same single-person portrait composition",
+      angry: "angry expression, tense brows, slightly glaring eyes",
+      sad: "sad expression, lowered gaze, fragile mood",
+      embarrassed: "embarrassed blush, shy gaze, awkward tension",
+      jealous: "jealous expression, subtle resentment, possessive eyes",
+      surprised: "surprised widened eyes, lifted brows, sudden reaction",
+      worried: "worried expression, anxious eyes, slight tension",
+      determined: "determined look, focused eyes, composed resolve",
+      affectionate: "affectionate loving expression, softened eyes, tender mood",
+      exhausted: "exhausted tired expression, drooping eyelids, low energy",
+    };
+    return map[raw] || `${label} expression, readable emotion, same character identity`;
+  }
+
+  function readVisualEmotionListFromUi() {
+    const raw = String(document.getElementById("dpg-asset-emotions")?.value || preservedVisualEmotionText || "").trim();
+    preservedVisualEmotionText = raw;
+    const items = unique(raw.split(/\r?\n|,/).map((item) => String(item || "").trim()).filter(Boolean), 24);
+    return items.length ? items : ["neutral"];
+  }
+
+  function visualCompositionFramingGuard(preset) {
+    const key = normalizeVisualCompositionPreset(preset || "standard_waist_up");
+    if (key === "standard_waist_up") return "STRICT FRAMING: waist-up medium portrait, head and torso fill most of the frame, natural crop exactly at the waist, subject shown large and centered";
+    if (key === "half_body") return "STRICT FRAMING: half-body medium-long portrait, head through mid-thigh fills most of the frame, natural crop around mid-thigh, subject shown large and centered";
+    if (key === "bust_close") return "STRICT FRAMING: tight bust portrait, head shoulders and upper chest fill the frame, face large and centered, natural crop around the upper chest";
+    return "";
+  }
+
+  function visualCompositionFramingNegativeGuard(preset) {
+    const key = normalizeVisualCompositionPreset(preset || "standard_waist_up");
+    if (key === "standard_waist_up") return "full body, whole body, lower body, thighs, knees, lower legs, feet, shoes, standing full body, long shot, wide shot, distant subject, small subject in frame";
+    if (key === "half_body") return "full body, whole body, knees, lower legs, feet, shoes, standing full body, long shot, wide shot, distant subject, small subject in frame";
+    if (key === "bust_close") return "waist, hips, thighs, legs, feet, shoes, full body, half body, waist-up portrait, long shot, wide shot, zoomed out portrait, small face in frame";
+    return "";
+  }
+
+  function visualCompositionGenderGuard(target, preset) {
+    const genderProfile = inferVisualGenderProfile(target);
+    const key = normalizeVisualCompositionPreset(preset || "standard_waist_up");
+    if (key !== "bust_close") return "";
+    if (genderProfile.key === "male") return "clearly male close portrait, masculine facial structure, masculine neck and shoulders";
+    if (genderProfile.key === "female") return "clearly female close portrait, feminine facial structure, feminine neck and shoulders";
+    return "clear stable original gender presentation in the close portrait";
+  }
+
+  function visualCompositionNegativeGuard(target, preset) {
+    const genderProfile = inferVisualGenderProfile(target);
+    const key = normalizeVisualCompositionPreset(preset || "standard_waist_up");
+    if (key !== "bust_close") return "";
+    if (genderProfile.key === "male") return "feminized close-up portrait, soft feminine face, delicate feminine jawline, feminine close crop";
+    if (genderProfile.key === "female") return "masculinized close-up portrait, overly masculine face, masculine close crop";
+    return "gender-swapped close portrait, identity drift in close crop";
+  }
+
+  function personaVisualHasCameraProp(target) {
+    const spec = target?.personaSpec || {};
+    const facts = target?.facts || {};
+    const source = [
+      spec.appearance,
+      spec.role,
+      facts.appearanceDigest,
+      facts.skillDigest,
+      target?.personaPrompt,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return /(\bcamera\b|\bdslr\b|\bslr\b|camera bag|camera strap|photograph(?:y|er|ic)?|photojournal|사진기|카메라|사진가|사진작가|촬영 장비)/i.test(source);
+  }
+
+  function visualCameraObjectNegativeGuard(target) {
+    if (personaVisualHasCameraProp(target)) return "";
+    return "camera, DSLR, SLR camera, camera object, camera icon, camera symbol, floating camera, photography equipment, camera graphic, camera pictogram, camera speech bubble, camera sticker";
+  }
+
+  function buildPersonaVisualPrompt(target, emotion, config, visualLock = null) {
+    const lock = normalizeVisualGenerationLock(visualLock, { confirmed: visualLock?.confirmed === true });
+    const identityPrompt = sanitizeAutomaticPositiveVisualPrompt(lock?.identityPrompt || buildVisualIdentityPrompt(target));
+    const stylePrompt = sanitizeAutomaticPositiveVisualPrompt(lock?.stylePrompt || config.stylePrompt);
+    const backgroundPrompt = lock?.backgroundPrompt || VISUAL_WHITE_BACKGROUND_POSITIVE;
+    const styleNotes = lock ? lock.styleNotes : String(document.getElementById("dpg-asset-style-notes")?.value || preservedVisualStyleNotes || "").trim();
+    const compositionChoice = lock ? {
+      preset: lock.compositionPreset,
+      notes: lock.compositionNotes,
+      definition: visualCompositionPresetDefinition(lock.compositionPreset),
+    } : currentVisualCompositionChoice();
+    if (!lock) preservedVisualStyleNotes = styleNotes;
+    return [
+      stylePrompt,
+      VISUAL_SINGLE_DEPICTION_POSITIVE,
+      identityPrompt,
+      compositionChoice.definition.prompt,
+      visualCompositionFramingGuard(compositionChoice.preset),
+      visualCompositionGenderGuard(target, compositionChoice.preset),
+      compositionChoice.notes,
+      `expression only: ${emotion}`,
+      visualEmotionDirections(emotion),
+      "facial-expression variation only, preserve identical identity, hairstyle, clothing, body proportions, framing, viewpoint, composition, and background",
+      styleNotes,
+      backgroundPrompt,
+      "consistent completely pure white background for every emotion variant",
+    ].filter(Boolean).join(", ");
+  }
+
+  function buildPersonaVisualNegativePrompt(config, visualLock = null, target = null, emotion = "") {
+    const lock = normalizeVisualGenerationLock(visualLock, { confirmed: visualLock?.confirmed === true });
+    const compositionChoice = lock ? { definition: visualCompositionPresetDefinition(lock.compositionPreset) } : currentVisualCompositionChoice();
+    const genderProfile = target ? inferVisualGenderProfile(target) : { negativeTags: "" };
+    return [
+      lock?.negativePrompt || config.negativePrompt,
+      lock?.extraNegativePrompt || config.extraNegativePrompt,
+      VISUAL_SINGLE_DEPICTION_NEGATIVE,
+      visualCameraObjectNegativeGuard(target),
+      lock?.compositionNegativePrompt || compositionChoice.definition.negativePrompt,
+      visualCompositionFramingNegativeGuard(lock?.compositionPreset || compositionChoice.definition.key),
+      visualCompositionNegativeGuard(target, lock?.compositionPreset || compositionChoice.definition.key),
+      genderProfile.negativeTags,
+      neutralExpressionNegativeTags(emotion),
+      VISUAL_WHITE_BACKGROUND_NEGATIVE,
+      "different character, different face, different hairstyle, different hair color, different eye color, different outfit, different clothing colors, different viewpoint, different framing, different crop, full body, multiple people",
+    ].filter(Boolean).join(", ");
+  }
+
+  function parseOptionalJsonObject(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function renderTemplateString(text, vars) {
+    return String(text || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
+      const value = vars[key];
+      if (value === null || value === undefined) return "";
+      return Array.isArray(value) ? JSON.stringify(value) : String(value);
+    });
+  }
+
+  function renderTemplateValue(value, vars) {
+    if (typeof value === "string") return renderTemplateString(value, vars);
+    if (Array.isArray(value)) return value.map((item) => renderTemplateValue(item, vars));
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, renderTemplateValue(item, vars)]));
+    }
+    return value;
+  }
+
+  function buildPersonaVisualTemplateVars(target, emotion, config, visualLock, prompt, negativePrompt) {
+    const lock = normalizeVisualGenerationLock(visualLock, { confirmed: visualLock?.confirmed === true });
+    const width = Number(lock?.width || config.width) || 832;
+    const height = Number(lock?.height || config.height) || 1216;
+    const baseSeed = Number.isFinite(Number(lock?.seed)) && Number(lock.seed) >= 0
+      ? Math.floor(Number(lock.seed))
+      : visualGenerationLockSeed(target, config);
+    return {
+      prompt,
+      positive_prompt: prompt,
+      negative: negativePrompt,
+      negative_prompt: negativePrompt,
+      emotion,
+      name: target.personaName,
+      width,
+      height,
+      steps: Number(lock?.steps || config.steps) || 28,
+      cfg: Number(lock?.cfg || config.cfg) || 5.5,
+      sampler: lock?.sampler || config.sampler || "k_euler_ancestral",
+      seed: baseSeed,
+      model: lock?.model || config.model || "",
+      checkpoint: lock?.checkpoint || config.checkpoint || "",
+      white_background: VISUAL_WHITE_BACKGROUND_POSITIVE,
+      transparent_background: "false",
+    };
+  }
+
+  function buildNaiPayload(config, vars) {
+    const advanced = parseOptionalJsonObject(config.advancedJson);
+    const payload = {
+      input: vars.prompt,
+      model: vars.model || undefined,
+      action: "generate",
+      parameters: {
+        ...advanced,
+        width: vars.width,
+        height: vars.height,
+        steps: vars.steps,
+        scale: vars.cfg,
+        cfg_scale: vars.cfg,
+        sampler: vars.sampler,
+        seed: vars.seed,
+        n_samples: 1,
+        negative_prompt: vars.negative,
+        uc: vars.negative,
+      },
+    };
+    return payload;
+  }
+
+  function collectImageStringsFromJson(value, out = []) {
+    if (!value) return out;
+    if (typeof value === "string") {
+      if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(value) || /^https?:\/\//i.test(value) || /^[A-Za-z0-9+/=\s]{800,}$/.test(value)) out.push(value);
+      return out;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectImageStringsFromJson(item, out));
+      return out;
+    }
+    if (typeof value === "object") Object.values(value).forEach((item) => collectImageStringsFromJson(item, out));
+    return out;
+  }
+
+  function base64ToUint8Array(data) {
+    const raw = String(data || "").replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, "").replace(/\s+/g, "");
+    if (!raw) return null;
+    const binary = typeof atob === "function" ? atob(raw) : "";
+    if (!binary) return null;
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  function detectImageExtFromBytes(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : null;
+    if (!data || data.length < 12) return "png";
+    if (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return "png";
+    if (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return "jpg";
+    if (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46) return "gif";
+    if (data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50) return "webp";
+    return "png";
+  }
+
+  function hasImageFileSignature(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : null;
+    if (!data || data.length < 4) return false;
+    return (data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47)
+      || (data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff)
+      || (data[0] === 0x47 && data[1] === 0x49 && data[2] === 0x46)
+      || (data.length >= 12 && data[0] === 0x52 && data[1] === 0x49 && data[2] === 0x46 && data[3] === 0x46 && data[8] === 0x57 && data[9] === 0x45 && data[10] === 0x42 && data[11] === 0x50);
+  }
+
+  function isZipBytes(bytes) {
+    return bytes instanceof Uint8Array && bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b && [0x03, 0x05, 0x07].includes(bytes[2]) && [0x04, 0x06, 0x08].includes(bytes[3]);
+  }
+
+  function readZipUint16(bytes, offset) {
+    return bytes[offset] | (bytes[offset + 1] << 8);
+  }
+
+  function readZipUint32(bytes, offset) {
+    return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+  }
+
+  async function inflateZipEntry(bytes) {
+    if (typeof DecompressionStream !== "function") throw new Error("ZIP deflate is not supported by this browser runtime");
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function extractFirstImageFromZip(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    let eocd = -1;
+    const min = Math.max(0, data.length - 65557);
+    for (let offset = data.length - 22; offset >= min; offset -= 1) {
+      if (readZipUint32(data, offset) === 0x06054b50) { eocd = offset; break; }
+    }
+    if (eocd < 0) throw new Error("ZIP response is missing its central directory");
+    const entryCount = readZipUint16(data, eocd + 10);
+    let offset = readZipUint32(data, eocd + 16);
+    const decoder = new TextDecoder("utf-8");
+    for (let index = 0; index < entryCount && offset + 46 <= data.length; index += 1) {
+      if (readZipUint32(data, offset) !== 0x02014b50) break;
+      const method = readZipUint16(data, offset + 10);
+      const compressedSize = readZipUint32(data, offset + 20);
+      const fileNameLength = readZipUint16(data, offset + 28);
+      const extraLength = readZipUint16(data, offset + 30);
+      const commentLength = readZipUint16(data, offset + 32);
+      const localOffset = readZipUint32(data, offset + 42);
+      const fileName = decoder.decode(data.slice(offset + 46, offset + 46 + fileNameLength));
+      offset += 46 + fileNameLength + extraLength + commentLength;
+      if (!/\.(?:png|jpe?g|webp|gif|avif)$/i.test(fileName)) continue;
+      if (readZipUint32(data, localOffset) !== 0x04034b50) continue;
+      const localNameLength = readZipUint16(data, localOffset + 26);
+      const localExtraLength = readZipUint16(data, localOffset + 28);
+      const start = localOffset + 30 + localNameLength + localExtraLength;
+      const compressed = data.slice(start, start + compressedSize);
+      if (method === 0) return compressed;
+      if (method === 8) return await inflateZipEntry(compressed);
+      throw new Error(`ZIP image uses unsupported compression method ${method}`);
+    }
+    throw new Error("ZIP response did not contain a supported image file");
+  }
+
+  function getByPath(value, path) {
+    const parts = String(path || "").split(".").map((part) => part.trim()).filter(Boolean);
+    let current = value;
+    for (const part of parts) {
+      if (Array.isArray(current) && /^\d+$/.test(part)) current = current[Number(part)];
+      else current = current && typeof current === "object" ? current[part] : undefined;
+    }
+    return current;
+  }
+
+  async function fetchWithTimeout(url, options = {}, timeoutMs = 120000, label = "request") {
+    const runtime = getRuntimeApi();
+    const fetchFn = runtime?.nativeFetch || runtime?.risuFetch || globalThis.fetch;
+    if (typeof fetchFn !== "function") throw new Error("RisuAI에서 사용할 수 있는 fetch API가 없습니다.");
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timer = null;
+    const ms = Math.max(1000, Number(timeoutMs || 120000));
+    const safeUrl = sanitizeLogUrl(url);
+    const startedAt = Date.now();
+    appendDebugLog("persona_visual", "image_fetch_start", { url: safeUrl, method: String(options?.method || "GET"), timeoutMs: ms, transport: runtime?.nativeFetch ? "nativeFetch" : runtime?.risuFetch ? "risuFetch" : "browserFetch" }, "debug");
+    try {
+      const requestOptions = controller ? { ...options, signal: controller.signal } : options;
+      const response = await Promise.race([
+        Promise.resolve(fetchFn(url, requestOptions)),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            try { controller?.abort?.(); } catch (_) {}
+            reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`));
+          }, ms);
+        }),
+      ]);
+      appendDebugLog("persona_visual", "image_fetch_complete", { url: safeUrl, method: String(options?.method || "GET"), status: Number(response?.status || 0) || null, ok: response?.ok !== false, elapsedMs: Date.now() - startedAt }, "debug");
+      return response;
+    } catch (error) {
+      const timedOut = controller?.signal?.aborted || /timed out/i.test(String(error?.message || error));
+      appendDebugLog("persona_visual", "image_fetch_failed", { url: safeUrl, method: String(options?.method || "GET"), elapsedMs: Date.now() - startedAt, transport: runtime?.nativeFetch ? "nativeFetch" : runtime?.risuFetch ? "risuFetch" : "browserFetch", error: errorForLog(error) }, "error");
+      if (timedOut) throw new Error(`${label} timed out after ${Math.round(ms / 1000)}s`);
+      if (/failed to fetch/i.test(String(error?.message || error)) && !runtime?.nativeFetch && !runtime?.risuFetch) {
+        throw new Error(`${label} 네트워크 요청 실패: RisuAI nativeFetch/risuFetch를 사용할 수 없어 브라우저 fetch로 폴백했고 CORS 또는 네트워크 정책에 막혔습니다.`);
+      }
+      throw error;
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+  }
+
+  function comfyBaseUrl(endpoint) {
+    return String(endpoint || "").replace(/\/+$/, "");
+  }
+
+
+  function looksLikeComfyWorkflowGraph(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const graph = value.prompt && typeof value.prompt === "object" && !Array.isArray(value.prompt) ? value.prompt : value;
+    return Object.values(graph).some((node) => node && typeof node === "object" && typeof node.class_type === "string" && node.inputs && typeof node.inputs === "object");
+  }
+
+  function looksLikeComfyWorkflowText(value) {
+    const raw = String(value || "").trim();
+    if (!raw.startsWith("{")) return false;
+    try { return looksLikeComfyWorkflowGraph(JSON.parse(raw)); } catch (_) { return false; }
+  }
+
+  function resolveComfyWorkflowSource(config = {}) {
+    const workflowRaw = String(config?.workflowJson || "").trim();
+    if (workflowRaw) {
+      try {
+        const parsed = JSON.parse(workflowRaw);
+        if (looksLikeComfyWorkflowGraph(parsed)) return { workflow: parsed, raw: workflowRaw, source: "workflowJson" };
+      } catch (_) {}
+    }
+    const modelRaw = String(config?.model || "").trim();
+    if (looksLikeComfyWorkflowText(modelRaw)) {
+      try {
+        return { workflow: JSON.parse(modelRaw), raw: modelRaw, source: "model_field_fallback" };
+      } catch (_) {}
+    }
+    return { workflow: {}, raw: workflowRaw || modelRaw, source: workflowRaw ? "workflowJson_invalid" : "missing" };
+  }
+
+  function comfyPromptGraph(workflow) {
+    return workflow?.prompt && typeof workflow.prompt === "object" && !Array.isArray(workflow.prompt) ? workflow.prompt : workflow;
+  }
+
+  function comfyInputReferencesNode(value, nodeId) {
+    const target = String(nodeId || "");
+    if (!target) return false;
+    if (Array.isArray(value)) {
+      if (value.length >= 2 && String(value[0]) === target && Number.isFinite(Number(value[1]))) return true;
+      return value.some((item) => comfyInputReferencesNode(item, target));
+    }
+    if (value && typeof value === "object") return Object.values(value).some((item) => comfyInputReferencesNode(item, target));
+    return false;
+  }
+
+  function findSoyaPromptParserBinding(workflow) {
+    const graph = comfyPromptGraph(workflow);
+    if (!graph || typeof graph !== "object") return null;
+    for (const [parserId, node] of Object.entries(graph)) {
+      if (String(node?.class_type || "") !== "SoyaPromptParser_mdsoya") continue;
+      const ref = node?.inputs?.text;
+      const sourceNodeId = Array.isArray(ref) && ref.length ? String(ref[0]) : "";
+      const sourceNode = sourceNodeId ? graph[sourceNodeId] : null;
+      const sourceText = String(sourceNode?.inputs?.value ?? "");
+      if (!sourceNodeId || !sourceText) continue;
+      return { graph, parserId: String(parserId), parserNode: node, sourceNodeId, sourceNode, sourceText };
+    }
+    return null;
+  }
+
+  function findSoyaTaggedSectionBounds(text, tag) {
+    const source = String(text || "");
+    const marker = `[${String(tag || "").trim().toUpperCase()}]`;
+    if (marker === "[]") return null;
+    const upper = source.toUpperCase();
+    const markerStart = upper.indexOf(marker);
+    if (markerStart < 0) return null;
+    const afterMarker = markerStart + marker.length;
+    const rest = source.slice(afterMarker);
+    const next = rest.match(/\r?\n(?=\[[A-Z0-9_]+\](?:\r?\n|$))/);
+    const end = next ? afterMarker + Number(next.index || 0) : source.length;
+    return { source, markerStart, afterMarker, end };
+  }
+
+  function readSoyaTaggedSection(text, tag) {
+    const bounds = findSoyaTaggedSectionBounds(text, tag);
+    if (!bounds) return "";
+    return bounds.source.slice(bounds.afterMarker, bounds.end).trim();
+  }
+
+  function writeSoyaTaggedSection(text, tag, value) {
+    const bounds = findSoyaTaggedSectionBounds(text, tag);
+    if (!bounds) return String(text || "");
+    const normalized = String(value ?? "").trim();
+    const replacement = normalized ? `\n${normalized}` : "";
+    return `${bounds.source.slice(0, bounds.afterMarker)}${replacement}${bounds.source.slice(bounds.end)}`;
+  }
+
+  function joinSoyaPromptParts(...parts) {
+    return parts.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
+  }
+
+  function findSoyaNegativeSourceNode(graph, positiveSourceNodeId) {
+    const candidates = [];
+    for (const [nodeId, node] of Object.entries(graph || {})) {
+      if (String(nodeId) === String(positiveSourceNodeId)) continue;
+      if (String(node?.class_type || "") !== "PrimitiveStringMultiline") continue;
+      const value = String(node?.inputs?.value ?? "");
+      if (!value) continue;
+      const title = String(node?._meta?.title || "");
+      let score = 0;
+      if (/negative|부정/i.test(title)) score += 12;
+      if (/\[SDXL\]/i.test(value)) score += 4;
+      if (/worst quality|low quality|bad anatomy|extra fingers/i.test(value)) score += 3;
+      if (/\[ANIMA_CONTENT\]|\[ANIMA_ALL\]|\[IMG_W\]|\[CHAR_LIST\]/i.test(value)) score -= 12;
+      const regexConsumer = Object.values(graph || {}).some((consumer) => String(consumer?.class_type || "") === "RegexExtract" && comfyInputReferencesNode(consumer?.inputs, nodeId));
+      if (regexConsumer) score += 5;
+      if (score > 0) candidates.push({ nodeId: String(nodeId), node, value, score });
+    }
+    return candidates.sort((a, b) => b.score - a.score)[0] || null;
+  }
+
+  function rewriteSoyaNegativePayload(source, negativePrompt) {
+    const negative = String(negativePrompt || "").trim();
+    if (!negative) return String(source || "");
+    if (/\[SDXL\]/i.test(String(source || ""))) return `${negative}\n[SDXL]\n${negative}`;
+    return negative;
+  }
+
+  function prepareSoyaComfyWorkflow(workflow, vars) {
+    const cloned = JSON.parse(JSON.stringify(workflow));
+    const binding = findSoyaPromptParserBinding(cloned);
+    if (!binding) return null;
+    let positiveSource = String(binding.sourceNode?.inputs?.value || "");
+    if (!/\[(?:ANIMA_CONTENT|ANIMA_ALL|SDXL)\]/i.test(positiveSource)) {
+      throw new Error("Soya Prompt Parser 입력은 감지했지만 [ANIMA_CONTENT]/[ANIMA_ALL]/[SDXL] 섹션을 찾지 못했습니다.");
+    }
+    const animaQuality = readSoyaTaggedSection(positiveSource, "ANIMA_QUALITY");
+    const animaArtist = readSoyaTaggedSection(positiveSource, "ANIMA_ARTIST");
+    const sdxlQuality = readSoyaTaggedSection(positiveSource, "SDXL_QUALITY");
+    const sdxlArtist = readSoyaTaggedSection(positiveSource, "SDXL_ARTIST");
+    const positive = String(vars?.prompt || "").trim();
+    const animaAll = joinSoyaPromptParts(animaQuality, animaArtist, positive);
+    const sdxlAll = joinSoyaPromptParts(sdxlQuality, sdxlArtist, positive);
+    const sectionValues = {
+      ANIMA_CONTENT: positive,
+      ANIMA_ALL: animaAll || positive,
+      SDXL: sdxlAll || positive,
+      CHAR_LIST: "",
+      CACHE_PATH: '{"list":[]}',
+      FACE_ID_ACTIVATE: "false",
+      FACE_ID_DIR: '{"list":[]}',
+      LORA_ACTIVATE: "false",
+      LORA_DATA: '{"list":[]}',
+      FACE_LORA_ACTIVATE: "false",
+      FACE_LORA_DATA: '{"list":[]}',
+      STYLE_LORA_ACTIVATE: "false",
+      STYLE_LORA_DATA: '{"list":[]}',
+      CHAR_FACE_TAG_INFORM: '{"list":[]}',
+      ANIMA_FD_ACTIVATE: "false",
+      ANIMA_HD_ACTIVATE: "false",
+      ANIMA_ED_ACTIVATE: "false",
+      FD_ACTIVATE: "false",
+      HD_ACTIVATE: "false",
+      ED_ACTIVATE: "false",
+      IMG_W: String(Number(vars?.width) || 832),
+      IMG_H: String(Number(vars?.height) || 1216),
+      SEED: String(Number.isFinite(Number(vars?.seed)) ? Math.floor(Number(vars.seed)) : 0),
+    };
+    for (const [tag, value] of Object.entries(sectionValues)) positiveSource = writeSoyaTaggedSection(positiveSource, tag, value);
+    binding.sourceNode.inputs.value = positiveSource;
+
+    const negativeSource = findSoyaNegativeSourceNode(binding.graph, binding.sourceNodeId);
+    if (!negativeSource) throw new Error("Soya Prompt Parser workflow에서 부정 프롬프트 원본 노드를 찾지 못했습니다.");
+    negativeSource.node.inputs.value = rewriteSoyaNegativePayload(negativeSource.value, vars?.negative);
+
+    const previewNodeIds = Object.entries(binding.graph).filter(([, node]) => String(node?.class_type || "") === "PreviewImage").map(([id]) => String(id));
+    const saveNodeIds = Object.entries(binding.graph).filter(([, node]) => String(node?.class_type || "") === "SaveImage").map(([id]) => String(id));
+    return {
+      workflow: cloned,
+      mode: "soya_prompt_parser",
+      parserNodeId: binding.parserId,
+      positiveSourceNodeId: binding.sourceNodeId,
+      negativeSourceNodeId: negativeSource.nodeId,
+      previewNodeIds,
+      saveNodeIds,
+    };
+  }
+
+  function prepareComfyWorkflowPayload(config, vars) {
+    const resolved = resolveComfyWorkflowSource(config);
+    if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("ComfyUI workflow JSON이 비어 있거나 API workflow 형식이 아닙니다.");
+    const soya = prepareSoyaComfyWorkflow(resolved.workflow, vars);
+    if (soya) {
+      const prepared = soya.workflow;
+      const payload = prepared.prompt ? prepared : { prompt: prepared, client_id: `lia-${Date.now().toString(36)}` };
+      if (!payload.client_id) payload.client_id = `lia-${Date.now().toString(36)}`;
+      appendDebugLog("persona_visual", "comfy_workflow_prepared", {
+        source: resolved.source,
+        mode: soya.mode,
+        parserNodeId: soya.parserNodeId,
+        positiveSourceNodeId: soya.positiveSourceNodeId,
+        negativeSourceNodeId: soya.negativeSourceNodeId,
+        previewNodeIds: soya.previewNodeIds,
+        saveNodeIds: soya.saveNodeIds,
+        width: Number(vars?.width || 0),
+        height: Number(vars?.height || 0),
+        seed: Number(vars?.seed || 0),
+      }, "info");
+      return payload;
+    }
+    const payload = renderTemplateValue(resolved.workflow.prompt ? resolved.workflow : { prompt: resolved.workflow, client_id: `lia-${Date.now().toString(36)}` }, vars);
+    if (!payload.client_id) payload.client_id = `lia-${Date.now().toString(36)}`;
+    appendDebugLog("persona_visual", "comfy_workflow_prepared", { source: resolved.source, mode: "template_variables" }, "debug");
+    return payload;
+  }
+
+  async function responseToImageBytes(res, config) {
+    const contentType = String(res?.headers?.get?.("content-type") || "").toLowerCase();
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (contentType.startsWith("image/") || hasImageFileSignature(bytes)) return bytes;
+    if (isZipBytes(bytes) || /(?:application|multipart)\/(?:zip|x-zip-compressed)/i.test(contentType)) return await extractFirstImageFromZip(bytes);
+    const text = new TextDecoder("utf-8").decode(bytes);
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch (_) {}
+    let candidates = parsed ? collectImageStringsFromJson(config.responsePath ? getByPath(parsed, config.responsePath) : parsed) : [];
+    if (!candidates.length && parsed) candidates = collectImageStringsFromJson(parsed);
+    const first = candidates[0] || "";
+    if (!first) throw new Error(`image API response did not contain an image payload. preview=${String(text || "").slice(0, 240)}`);
+    if (/^https?:\/\//i.test(first)) {
+      const downloadRes = await fetchWithTimeout(first, { method: "GET" }, Math.min(60000, config.timeoutMs || 120000), "image download");
+      if (!downloadRes.ok) throw new Error(`image download failed ${downloadRes.status}`);
+      return new Uint8Array(await downloadRes.arrayBuffer());
+    }
+    const decoded = base64ToUint8Array(first);
+    if (!decoded) throw new Error("image base64 could not be decoded");
+    return decoded;
+  }
+
+  function validatePromptOnlyIllustrationTemplate(config) {
+    const type = normalizeIllustrationProviderType(config?.provider);
+    const requireVars = (source, label) => {
+      const text = String(source || "");
+      const hasPositive = /\{\{\s*(?:prompt|positive_prompt)\s*\}\}/i.test(text);
+      const hasNegative = /\{\{\s*(?:negative|negative_prompt)\s*\}\}/i.test(text);
+      if (!hasPositive || !hasNegative) {
+        throw new Error(`${label}에는 {{prompt}}(또는 {{positive_prompt}})와 {{negative}}(또는 {{negative_prompt}}) 변수가 모두 필요합니다. 별도 Reference 노드는 필요하지 않습니다.`);
+      }
+    };
+    if (type === "comfyui-local") {
+      const resolved = resolveComfyWorkflowSource(config);
+      if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("ComfyUI workflow JSON이 비어 있거나 API workflow 형식이 아닙니다.");
+      if (!findSoyaPromptParserBinding(resolved.workflow)) requireVars(resolved.raw || JSON.stringify(resolved.workflow), "ComfyUI workflow JSON");
+    }
+    if (type === "custom-json") requireVars(config.requestTemplateJson, "Custom JSON request template");
+    return true;
+  }
+
+  async function requestIllustrationImage(config, target, emotion, visualLock = null, overrides = {}) {
+    validatePromptOnlyIllustrationTemplate(config);
+    const prompt = String(overrides?.promptOverride || "").trim() || buildPersonaVisualPrompt(target, emotion, config, visualLock);
+    const negativePrompt = String(overrides?.negativePromptOverride || "").trim() || buildPersonaVisualNegativePrompt(config, visualLock, target, emotion);
+    const vars = buildPersonaVisualTemplateVars(target, emotion, config, visualLock, prompt, negativePrompt);
+    if (!config.endpoint && normalizeIllustrationProviderType(config.provider) !== "comfyui-local") throw new Error("삽화 endpoint가 비어 있습니다.");
+    const type = normalizeIllustrationProviderType(config.provider);
+    const debugRequest = {
+      ...summarizeVisualTargetForDebug(target),
+      emotion: String(emotion || "").trim() || "neutral",
+      provider: String(config?.provider || "").trim(),
+      providerType: type,
+      model: String(config?.model || "").trim(),
+      checkpoint: String(config?.checkpoint || "").trim(),
+      endpoint: sanitizeLogUrl(config?.endpoint || ""),
+      width: Number(config?.width || 0) || 0,
+      height: Number(config?.height || 0) || 0,
+      steps: Number(config?.steps || 0) || 0,
+      cfg: Number(config?.cfg || 0) || 0,
+      sampler: String(config?.sampler || "").trim(),
+      seed: Number(vars?.seed || 0) || 0,
+      visualLockConfirmed: visualLock?.confirmed === true,
+      prompt: String(prompt || ""),
+      negativePrompt: String(negativePrompt || ""),
+      promptHash: hashText(String(prompt || "")),
+      negativePromptHash: hashText(String(negativePrompt || "")),
+    };
+    appendDebugLog("persona_visual", "image_generation_request", debugRequest, "info");
+    try {
+      if (type === "comfyui-local") {
+        const base = comfyBaseUrl(config.endpoint);
+        const payload = prepareComfyWorkflowPayload(config, vars);
+        const promptRes = await fetchWithTimeout(`${base}/prompt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(payload),
+        }, config.timeoutMs, "ComfyUI prompt");
+        if (!promptRes.ok) throw new Error(`ComfyUI prompt failed ${promptRes.status}`);
+        const promptData = await promptRes.json();
+        const promptId = String(promptData?.prompt_id || promptData?.promptId || promptData?.id || "").trim();
+        if (!promptId) throw new Error("ComfyUI prompt_id를 받지 못했습니다.");
+        const deadline = Date.now() + config.timeoutMs;
+        while (Date.now() < deadline) {
+          const historyRes = await fetchWithTimeout(`${base}/history/${encodeURIComponent(promptId)}`, { method: "GET", headers: { Accept: "application/json" } }, Math.min(20000, Math.max(5000, deadline - Date.now())), "ComfyUI history");
+          if (historyRes.ok) {
+            const history = await historyRes.json();
+            const outputs = history?.[promptId]?.outputs || history?.outputs || {};
+            const image = Object.values(outputs).flatMap((output) => Array.isArray(output?.images) ? output.images : [])[0];
+            if (image?.filename) {
+              const params = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder || "", type: image.type || "output" });
+              const imageRes = await fetchWithTimeout(`${base}/view?${params.toString()}`, { method: "GET" }, Math.min(30000, Math.max(5000, deadline - Date.now())), "ComfyUI image view");
+              if (!imageRes.ok) throw new Error(`ComfyUI image view failed ${imageRes.status}`);
+              const result = { bytes: new Uint8Array(await imageRes.arrayBuffer()), prompt, negativePrompt, seed: vars.seed };
+              appendDebugLog("persona_visual", "image_generation_result", { ...summarizeVisualTargetForDebug(target), emotion: String(emotion || "").trim() || "neutral", providerType: type, seed: vars.seed, bytes: result.bytes?.length || 0, promptHash: hashText(String(prompt || "")), negativePromptHash: hashText(String(negativePrompt || "")), promptId }, "info");
+              return result;
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        }
+        throw new Error("ComfyUI generation timed out.");
+      }
+      let payload = {};
+      if (type === "custom-json") {
+        const template = parseOptionalJsonObject(config.requestTemplateJson);
+        if (!Object.keys(template).length) throw new Error("Custom JSON request template이 비어 있습니다.");
+        payload = renderTemplateValue(template, vars);
+      } else {
+        payload = buildNaiPayload(config, vars);
+      }
+      const headers = { "Content-Type": "application/json", Accept: "application/json, image/*" };
+      Object.assign(headers, parseOptionalJsonObject(config.headersJson));
+      if (config.apiKey) {
+        if (config.apiKeyHeader === "x-api-key") headers["x-api-key"] = headers["x-api-key"] || config.apiKey;
+        else if (config.apiKeyHeader === "authorization-raw") headers.Authorization = headers.Authorization || config.apiKey;
+        else if (config.apiKeyHeader !== "none") headers.Authorization = headers.Authorization || `Bearer ${config.apiKey}`;
+      }
+      const res = await fetchWithTimeout(config.endpoint, { method: "POST", headers, body: JSON.stringify(payload) }, config.timeoutMs, "illustration generation");
+      if (!res.ok) {
+        const preview = await res.text().catch(() => "");
+        throw new Error(`삽화 API 실패 ${res.status}: ${String(preview || "").slice(0, 320)}`);
+      }
+      const bytes = await responseToImageBytes(res, config);
+      const result = { bytes, prompt, negativePrompt, seed: vars.seed };
+      appendDebugLog("persona_visual", "image_generation_result", { ...summarizeVisualTargetForDebug(target), emotion: String(emotion || "").trim() || "neutral", providerType: type, seed: vars.seed, bytes: result.bytes?.length || 0, promptHash: hashText(String(prompt || "")), negativePromptHash: hashText(String(negativePrompt || "")) }, "info");
+      return result;
+    } catch (error) {
+      appendDebugLog("persona_visual", "image_generation_failed", { ...debugRequest, error: errorForLog(error) }, "error");
+      throw error;
+    }
+  }
+
+  async function upsertPersonaVisualAsset(target, entry) {
+    const store = await readPersonaVisualAssetStore();
+    const sets = { ...(store.sets || {}) };
+    const legacy = target.legacyPersonaKey && target.legacyPersonaKey !== target.personaKey ? sets[target.legacyPersonaKey] : null;
+    const fallback = target.fallbackPersonaKey && target.fallbackPersonaKey !== target.personaKey ? sets[target.fallbackPersonaKey] : null;
+    const current = normalizeVisualAssetSet(sets[target.personaKey] || legacy || fallback || {
+      personaKey: target.personaKey,
+      personaId: target.personaId,
+      personaName: target.personaName,
+      assetPrefix: target.assetPrefix,
+      sourceType: target.sourceType,
+      identityHash: hashText(target.identitySummary || target.promptBasis || target.personaKey),
+      identitySummary: target.identitySummary,
+      promptBasis: target.promptBasis,
+      images: {},
+      anchorEmotion: "neutral",
+    }, target.personaKey);
+    current.personaKey = target.personaKey;
+    current.personaId = target.personaId;
+    current.personaName = target.personaName;
+    current.assetPrefix = target.assetPrefix;
+    current.sourceType = target.sourceType;
+    current.identitySummary = target.identitySummary;
+    current.promptBasis = target.promptBasis;
+    current.updatedAt = new Date().toISOString();
+    current.images[entry.emotion] = normalizeVisualAssetEntry(entry, entry.emotion);
+    if (entry.emotion === "neutral") {
+      current.anchorEmotion = "neutral";
+      current.visualLockCandidate = normalizeVisualGenerationLock(entry.generationSnapshot || null, { confirmed: false });
+      current.visualLock = null;
+    }
+    Object.values(current.images).forEach((item) => { item.isAnchor = item.emotion === "neutral"; });
+    sets[target.personaKey] = current;
+    if (legacy && target.legacyPersonaKey !== target.personaKey) delete sets[target.legacyPersonaKey];
+    if (fallback && target.fallbackPersonaKey !== target.personaKey) delete sets[target.fallbackPersonaKey];
+    await writePersonaVisualAssetStore({ ...store, updatedAt: new Date().toISOString(), sets });
+    return current;
+  }
+
+  async function removePersonaVisualAsset(target, emotion) {
+    const store = await readPersonaVisualAssetStore();
+    const bundle = normalizeVisualAssetSet(store.sets?.[target.personaKey] || store.sets?.[target.legacyPersonaKey] || {}, target.personaKey);
+    if (!bundle.personaKey) return false;
+    const removedEmotion = String(emotion || "").trim();
+    const removedEntry = bundle.images?.[removedEmotion] || null;
+    delete bundle.images[removedEmotion];
+    const remaining = Object.keys(bundle.images);
+    if (!remaining.length) delete store.sets[target.personaKey];
+    else {
+      bundle.anchorEmotion = "neutral";
+      if (removedEmotion === "neutral") {
+        bundle.visualLockCandidate = null;
+        bundle.visualLock = null;
+      }
+      Object.values(bundle.images).forEach((item) => { item.isAnchor = item.emotion === "neutral"; });
+      store.sets[target.personaKey] = bundle;
+    }
+    await writePersonaVisualAssetStore(store);
+    if (removedEntry?.backupId) await removePersonaVisualAssetBackup(removedEntry.backupId);
+    revokeVisualAssetObjectUrls();
+    return true;
+  }
+
+  async function discardPersonaVisualAssetBundle(target) {
+    const store = await readPersonaVisualAssetStore();
+    const candidateKeys = unique([
+      String(target?.personaKey || "").trim(),
+      String(target?.legacyPersonaKey || "").trim(),
+      String(target?.fallbackPersonaKey || "").trim(),
+    ].filter(Boolean), 8);
+    const removed = [];
+    for (const key of candidateKeys) {
+      const bundle = store.sets?.[key];
+      if (!bundle) continue;
+      const samePersonaId = target?.personaId && String(bundle?.personaId || "").trim() === String(target.personaId || "").trim();
+      const samePrimaryKey = key === String(target?.personaKey || "").trim();
+      const sameLegacyKey = key === String(target?.legacyPersonaKey || "").trim();
+      const sameFallbackKey = key === String(target?.fallbackPersonaKey || "").trim();
+      if (!(samePersonaId || samePrimaryKey || sameLegacyKey || sameFallbackKey)) continue;
+      const normalized = normalizeVisualAssetSet(bundle, key);
+      removed.push({
+        key,
+        personaId: String(normalized.personaId || ""),
+        personaName: String(normalized.personaName || target?.personaName || "Persona"),
+        assetCount: Object.keys(normalized.images || {}).length,
+        assetNames: Object.values(normalized.images || {}).map((item) => String(item?.assetName || "")).filter(Boolean),
+        backupIds: Object.values(normalized.images || {}).map((item) => String(item?.backupId || "")).filter(Boolean),
+        hadVisualLock: Boolean(normalized.visualLock?.confirmed),
+        hadVisualLockCandidate: Boolean(normalized.visualLockCandidate),
+      });
+      delete store.sets[key];
+    }
+    if (!removed.length) return { removed: false, assetCount: 0, bundles: [] };
+    await writePersonaVisualAssetStore({ ...store, updatedAt: new Date().toISOString() });
+    for (const backupId of unique(removed.flatMap((item) => item.backupIds || []).filter(Boolean), 256)) {
+      await removePersonaVisualAssetBackup(backupId);
+    }
+    revokeVisualAssetObjectUrls();
+    appendDebugLog("persona_visual", "asset_bundle_discarded", {
+      personaId: String(target?.personaId || ""),
+      personaName: String(target?.personaName || "Persona"),
+      personaKey: String(target?.personaKey || ""),
+      bundleCount: removed.length,
+      assetCount: removed.reduce((sum, item) => sum + Number(item.assetCount || 0), 0),
+      bundles: removed,
+      underlyingAssetFilesDeleted: false,
+    }, "info");
+    return {
+      removed: true,
+      assetCount: removed.reduce((sum, item) => sum + Number(item.assetCount || 0), 0),
+      bundles: removed,
+    };
+  }
+
+  async function confirmPersonaVisualGenerationLock(target) {
+    const store = await readPersonaVisualAssetStore();
+    const source = store.sets?.[target.personaKey] || store.sets?.[target.legacyPersonaKey] || null;
+    const bundle = normalizeVisualAssetSet(source || {}, target.personaKey);
+    if (!bundle.images?.neutral) throw new Error("먼저 Neutral 기준 에셋을 생성해 주세요.");
+    if (!bundle.visualLockCandidate) throw new Error("현재 Neutral에는 Generation Lock 후보가 없습니다. Neutral을 다시 생성해 주세요.");
+    const confirmed = normalizeVisualGenerationLock({ ...bundle.visualLockCandidate, confirmed: true, lockedAt: new Date().toISOString() }, { confirmed: true });
+    bundle.anchorEmotion = "neutral";
+    bundle.visualLock = confirmed;
+    bundle.visualLockCandidate = normalizeVisualGenerationLock(bundle.visualLockCandidate, { confirmed: false });
+    Object.values(bundle.images).forEach((item) => {
+      item.isAnchor = item.emotion === "neutral";
+      if (item.emotion === "neutral") item.lockHash = confirmed.lockHash;
+    });
+    store.sets[target.personaKey] = bundle;
+    if (target.legacyPersonaKey && target.legacyPersonaKey !== target.personaKey) delete store.sets[target.legacyPersonaKey];
+    await writePersonaVisualAssetStore(store);
+    return bundle;
+  }
+
+  async function setPersonaVisualAnchor(target, emotion) {
+    if (String(emotion || "").trim() !== "neutral") throw new Error("Visual Master는 Neutral 에셋만 사용할 수 있습니다.");
+    return await confirmPersonaVisualGenerationLock(target);
+  }
+
+  async function generatePersonaVisualEmotion(ctx, emotion, options = {}) {
+    const currentConfig = normalizeIllustrationConfig(options.config || readIllustrationConfig());
+    if (currentConfig.enabled === false) throw new Error("삽화 기능이 비활성화되어 있습니다.");
+    const baseCtx = options.ctx || ctx || await getContext();
+    const freshCtx = { ...(baseCtx || {}), visualAssetStore: await readPersonaVisualAssetStore() };
+    const target = resolvePersonaVisualTarget(freshCtx);
+    if (!target.personaPrompt && !target.personaSpec?.appearance) throw new Error("현재 Persona에서 시각 정보를 찾지 못했습니다.");
+    const normalizedEmotion = String(emotion || "neutral").trim() || "neutral";
+    const bundle = target.bundle || freshCtx.visualAssetStore?.sets?.[target.personaKey] || null;
+    let visualLock = null;
+    let generationConfig = currentConfig;
+    let generationSnapshot = null;
+    if (normalizedEmotion === "neutral") {
+      generationSnapshot = createVisualGenerationLockCandidate(target, currentConfig);
+      generationConfig = normalizeIllustrationConfig({
+        ...currentConfig,
+        seed: generationSnapshot.seed,
+        width: generationSnapshot.width,
+        height: generationSnapshot.height,
+        steps: generationSnapshot.steps,
+        cfg: generationSnapshot.cfg,
+        sampler: generationSnapshot.sampler,
+        model: generationSnapshot.model,
+        checkpoint: generationSnapshot.checkpoint,
+        stylePrompt: generationSnapshot.stylePrompt,
+        negativePrompt: generationSnapshot.negativePrompt,
+        extraNegativePrompt: generationSnapshot.extraNegativePrompt,
+        advancedJson: generationSnapshot.advancedJson,
+        transparentBackground: false,
+      });
+    } else {
+      visualLock = normalizeVisualGenerationLock(bundle?.visualLock || null, { confirmed: true });
+      if (!visualLock?.confirmed) throw new Error("먼저 Neutral 이미지를 만든 뒤 ‘Neutral 기준 확정’을 눌러 주세요.");
+      generationConfig = lockedIllustrationConfig(currentConfig, visualLock);
+      generationSnapshot = visualLock;
+    }
+    const generated = await requestIllustrationImage(generationConfig, target, normalizedEmotion, visualLock, {
+      promptOverride: String(options.promptOverride || "").trim(),
+      negativePromptOverride: String(options.negativePromptOverride || "").trim(),
+    });
+    if (typeof api.saveAsset !== "function") throw new Error("RisuAI saveAsset API를 사용할 수 없습니다.");
+    const sourceBytes = generated?.bytes instanceof Uint8Array
+      ? new Uint8Array(generated.bytes)
+      : await visualAssetDataToBytes(generated?.bytes);
+    if (!sourceBytes?.length || !hasImageFileSignature(sourceBytes)) throw new Error("생성된 이미지 바이트가 비어 있거나 손상되었습니다.");
+    // Tauri host calls may transfer/detach the exact Uint8Array passed to saveAsset().
+    // Never reuse that same buffer for backup, preview, or diagnostics.
+    const saveBytes = new Uint8Array(sourceBytes);
+    const saveInputBytes = saveBytes.length;
+    const assetPath = await api.saveAsset(saveBytes);
+    appendDebugLog("persona_visual", "image_asset_save_complete", {
+      personaKey: target.personaKey,
+      emotion: normalizedEmotion,
+      assetPath,
+      sourceBytes: sourceBytes.length,
+      saveInputBytes,
+      saveBufferBytesAfterHost: saveBytes.length,
+      hostDetachedInput: saveBytes.length !== saveInputBytes,
+    }, "debug");
+    revokeVisualAssetObjectUrls();
+    const ext = detectImageExtFromBytes(sourceBytes);
+    const mime = `image/${ext === "jpg" ? "jpeg" : ext}`;
+    const backupId = visualAssetBackupIdForKey(target.personaKey, normalizedEmotion);
+    let backupBytes = 0;
+    try {
+      const backupResult = await writePersonaVisualAssetBackup(backupId, sourceBytes, mime);
+      backupBytes = Number(backupResult?.bytes || 0);
+    } catch (error) {
+      appendDebugLog("persona_visual", "image_asset_backup_failed", {
+        personaKey: target.personaKey,
+        personaName: target.personaName,
+        emotion: normalizedEmotion,
+        backupId,
+        error: errorForLog(error),
+      }, "warn");
+    }
+    const entry = {
+      emotion: normalizedEmotion,
+      assetPath,
+      assetName: `${target.assetPrefix}_${emotionAssetSlug(normalizedEmotion)}`,
+      prompt: generated.prompt,
+      negativePrompt: generated.negativePrompt,
+      provider: generationConfig.provider,
+      seed: generated.seed,
+      width: generationConfig.width,
+      height: generationConfig.height,
+      generatedAt: new Date().toISOString(),
+      mime,
+      backupId: backupBytes ? backupId : "",
+      backupBytes,
+      isAnchor: normalizedEmotion === "neutral",
+      previewText: normalizedEmotion,
+      lockHash: String(generationSnapshot?.lockHash || ""),
+      generationSnapshot: normalizedEmotion === "neutral" ? generationSnapshot : null,
+    };
+    const updatedBundle = await upsertPersonaVisualAsset(target, entry);
+    return { entry, target, bundle: updatedBundle };
+  }
+
+  function bytesToDataUrl(bytes, mime = "image/png") {
+    const chunkSize = 0x8000;
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return `data:${mime};base64,${btoa(binary)}`;
+  }
+
+  function revokeVisualAssetObjectUrls() {
+    for (const url of visualAssetObjectUrls instanceof Set ? visualAssetObjectUrls : []) {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+    visualAssetObjectUrls = new Set();
+    visualAssetPreviewUrlCache = new Map();
+  }
+
+  async function validatePersonaVisualAssetReadData(data, context = {}) {
+    const bytes = await visualAssetDataToBytes(data);
+    if (!bytes?.length) {
+      const error = new Error(`readImage가 이미지 바이트가 아닌 값을 반환했습니다: ${data?.constructor?.name || typeof data}`);
+      appendDebugLog("persona_visual", "image_asset_read_invalid", { ...context, dataType: data?.constructor?.name || typeof data, reason: "not_bytes", error: errorForLog(error) }, "warn");
+      throw error;
+    }
+    if (!hasImageFileSignature(bytes)) {
+      const preview = Array.from(bytes.subarray(0, Math.min(16, bytes.length))).map((value) => value.toString(16).padStart(2, "0")).join(" ");
+      const error = new Error("readImage가 유효한 PNG/JPEG/GIF/WebP 이미지 데이터를 반환하지 않았습니다.");
+      appendDebugLog("persona_visual", "image_asset_read_invalid", { ...context, dataType: data?.constructor?.name || typeof data, bytes: bytes.length, signaturePreview: preview, reason: "invalid_signature", error: errorForLog(error) }, "warn");
+      throw error;
+    }
+    return bytes;
+  }
+
+  async function readPersonaVisualAssetData(assetPath) {
+    const path = String(assetPath || "").trim();
+    if (!path) return null;
+    if (/^data:image\//i.test(path)) return await validatePersonaVisualAssetReadData(path, { assetPath: path, source: "data_url" });
+    if (typeof api.readImage !== "function") throw new Error("RisuAI readImage API를 사용할 수 없습니다.");
+    const readKey = path.startsWith("assets/") ? path.slice(7) : path;
+    const filename = path.split("/").pop() || "";
+    appendDebugLog("persona_visual", "image_asset_read_start", { assetPath: path, readKey, filename }, "debug");
+    let firstError = null;
+    try {
+      const data = await api.readImage(readKey);
+      if (data) {
+        const bytes = await validatePersonaVisualAssetReadData(data, { assetPath: path, readKey, fallback: false });
+        appendDebugLog("persona_visual", "image_asset_read_complete", { assetPath: path, readKey, fallback: false, dataType: data?.constructor?.name || typeof data, bytes: bytes.length }, "debug");
+        return bytes;
+      }
+    } catch (error) {
+      firstError = error;
+      appendDebugLog("persona_visual", "image_asset_read_primary_failed", { assetPath: path, readKey, error: errorForLog(error) }, "warn");
+    }
+    if (filename && filename !== readKey) {
+      try {
+        const data = await api.readImage(filename);
+        if (data) {
+          const bytes = await validatePersonaVisualAssetReadData(data, { assetPath: path, readKey: filename, fallback: true });
+          appendDebugLog("persona_visual", "image_asset_read_complete", { assetPath: path, readKey: filename, fallback: true, dataType: data?.constructor?.name || typeof data, bytes: bytes.length }, "debug");
+          return bytes;
+        }
+      } catch (error) {
+        appendDebugLog("persona_visual", "image_asset_read_fallback_failed", { assetPath: path, readKey: filename, error: errorForLog(error) }, "warn");
+        if (!firstError) firstError = error;
+      }
+    }
+    if (firstError) throw firstError;
+    throw new Error(`저장된 이미지 에셋을 찾지 못했습니다: ${path}`);
+  }
+
+  async function visualAssetDataToPreviewUrl(data, mime = "image/png") {
+    if (!data) return "";
+    if (typeof data === "string") {
+      if (/^(?:data:|blob:|https?:)/i.test(data)) return data;
+      const decoded = base64ToUint8Array(data);
+      if (decoded) return bytesToDataUrl(decoded, mime);
+      return `data:${mime || "image/png"};base64,${data}`;
+    }
+    if (typeof Blob !== "undefined" && data instanceof Blob) {
+      if (typeof URL?.createObjectURL === "function") {
+        const url = URL.createObjectURL(data);
+        visualAssetObjectUrls.add(url);
+        return url;
+      }
+      const bytes = new Uint8Array(await data.arrayBuffer());
+      return bytesToDataUrl(bytes, data.type || mime);
+    }
+    const bytes = data instanceof Uint8Array
+      ? data
+      : (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(data))
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : (typeof ArrayBuffer !== "undefined" && data instanceof ArrayBuffer)
+          ? new Uint8Array(data)
+          : null;
+    if (!bytes) throw new Error(`지원하지 않는 readImage 반환형입니다: ${data?.constructor?.name || typeof data}`);
+    const ext = detectImageExtFromBytes(bytes);
+    const resolvedMime = mime || (ext === "jpg" ? "image/jpeg" : `image/${ext || "png"}`);
+    return bytesToDataUrl(bytes, resolvedMime);
+  }
+
+  async function restorePersonaVisualAssetFromBackup(assetPath, recovery = {}) {
+    const path = String(assetPath || "").trim();
+    const personaKey = String(recovery?.personaKey || "").trim();
+    const emotion = String(recovery?.emotion || "").trim();
+    const backupId = String(recovery?.backupId || "").trim();
+    if (!backupId) return null;
+    const backup = await readPersonaVisualAssetBackup(backupId);
+    if (!backup?.bytes?.length || !hasImageFileSignature(backup.bytes)) throw new Error("복구용 이미지 백업이 없거나 손상되었습니다.");
+    if (typeof api.saveAsset !== "function") throw new Error("RisuAI saveAsset API를 사용할 수 없습니다.");
+    // Preserve one independent copy for preview/runtime use. The host may detach
+    // the buffer instance passed to saveAsset() during IPC transfer.
+    const preservedBytes = new Uint8Array(backup.bytes);
+    const saveBytes = new Uint8Array(preservedBytes);
+    const saveInputBytes = saveBytes.length;
+    const restoredPath = await api.saveAsset(saveBytes);
+    if (!preservedBytes.length || !hasImageFileSignature(preservedBytes)) throw new Error("saveAsset 호출 후 복구 원본 바이트가 손상되었습니다.");
+    await updatePersonaVisualAssetRecoveryMetadata({
+      personaKey,
+      emotion,
+      backupId,
+      assetPath: restoredPath,
+      backupBytes: preservedBytes.length,
+    });
+    appendDebugLog("persona_visual", "image_asset_restored_after_update", {
+      personaKey,
+      emotion,
+      backupId,
+      oldAssetPath: path,
+      restoredAssetPath: restoredPath,
+      bytes: preservedBytes.length,
+      saveInputBytes,
+      saveBufferBytesAfterHost: saveBytes.length,
+      hostDetachedInput: saveBytes.length !== saveInputBytes,
+    }, "info");
+    return { bytes: preservedBytes, assetPath: restoredPath, mime: backup.mime || recovery?.mime || "image/png" };
+  }
+
+  async function ensurePersonaVisualAssetAvailable(entry, recovery = {}) {
+    if (!entry?.assetPath) return null;
+    const context = {
+      personaKey: String(recovery?.personaKey || "").trim(),
+      emotion: String(recovery?.emotion || entry?.emotion || "").trim(),
+      backupId: String(recovery?.backupId || entry?.backupId || "").trim(),
+      mime: String(recovery?.mime || entry?.mime || "image/png").trim() || "image/png",
+    };
+    try {
+      const bytes = await readPersonaVisualAssetData(entry.assetPath);
+      if (!bytes?.length || !hasImageFileSignature(bytes)) throw new Error("저장된 이미지 에셋 바이트 검증에 실패했습니다.");
+      return { entry, bytes, restored: false };
+    } catch (error) {
+      if (!context.backupId) throw error;
+      const restored = await restorePersonaVisualAssetFromBackup(entry.assetPath, context);
+      if (!restored) throw error;
+      const nextEntry = { ...entry, assetPath: restored.assetPath, backupId: context.backupId, backupBytes: restored.bytes.length };
+      return { entry: nextEntry, bytes: restored.bytes, restored: true };
+    }
+  }
+
+  async function readPersonaVisualAssetUrl(assetPath, mime = "image/png", recovery = {}) {
+    const path = String(assetPath || "").trim();
+    if (!path) return "";
+    const personaKey = String(recovery?.personaKey || "").trim();
+    const emotion = String(recovery?.emotion || "").trim();
+    let backupId = String(recovery?.backupId || "").trim();
+    const cacheKey = `${path}|${mime || "image/png"}|${backupId}`;
+    if (visualAssetPreviewUrlCache.has(cacheKey)) return await Promise.resolve(visualAssetPreviewUrlCache.get(cacheKey));
+    const pending = (async () => {
+      let data = null;
+      try {
+        data = await readPersonaVisualAssetData(path);
+      } catch (readError) {
+        if (!backupId) throw readError;
+        const restored = await restorePersonaVisualAssetFromBackup(path, { personaKey, emotion, backupId, mime });
+        if (!restored?.bytes?.length || !hasImageFileSignature(restored.bytes)) throw readError;
+        appendDebugLog("persona_visual", "image_asset_preview_using_backup", {
+          personaKey,
+          emotion,
+          backupId,
+          oldAssetPath: path,
+          restoredAssetPath: restored.assetPath,
+          bytes: restored.bytes.length,
+        }, "debug");
+        data = restored.bytes;
+      }
+      if (!backupId && personaKey && emotion) {
+        try {
+          const bytes = await visualAssetDataToBytes(data);
+          if (bytes?.length) {
+            backupId = visualAssetBackupIdForKey(personaKey, emotion);
+            const saved = await writePersonaVisualAssetBackup(backupId, bytes, mime);
+            await updatePersonaVisualAssetRecoveryMetadata({
+              personaKey,
+              emotion,
+              backupId,
+              assetPath: path,
+              backupBytes: Number(saved?.bytes || bytes.length),
+            });
+            appendDebugLog("persona_visual", "image_asset_backup_migrated", {
+              personaKey,
+              emotion,
+              backupId,
+              assetPath: path,
+              bytes: bytes.length,
+            }, "info");
+          }
+        } catch (backupError) {
+          appendDebugLog("persona_visual", "image_asset_backup_migration_failed", {
+            personaKey,
+            emotion,
+            assetPath: path,
+            error: errorForLog(backupError),
+          }, "warn");
+        }
+      }
+      return await visualAssetDataToPreviewUrl(data, mime);
+    })();
+    visualAssetPreviewUrlCache.set(cacheKey, pending);
+    try {
+      const url = await pending;
+      if (url) visualAssetPreviewUrlCache.set(cacheKey, url);
+      else visualAssetPreviewUrlCache.delete(cacheKey);
+      return url || "";
+    } catch (error) {
+      visualAssetPreviewUrlCache.delete(cacheKey);
+      throw error;
+    }
+  }
+
+  function waitForVisualAssetImageLoad(img, timeoutMs = 5000) {
+    return new Promise((resolve, reject) => {
+      if (!img) return reject(new Error("이미지 요소가 없습니다."));
+      let settled = false;
+      const finish = (ok, error = null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        img.onload = null;
+        img.onerror = null;
+        if (ok && img.naturalWidth > 0 && img.naturalHeight > 0) resolve(true);
+        else reject(error || new Error("브라우저가 이미지 미리보기를 디코딩하지 못했습니다."));
+      };
+      const timer = setTimeout(() => finish(false, new Error("이미지 미리보기 로딩 시간이 초과되었습니다.")), Math.max(1000, timeoutMs));
+      img.onload = () => finish(true);
+      img.onerror = () => finish(false, new Error("브라우저 이미지 디코딩 실패"));
+      if (img.complete) queueMicrotask(() => img.naturalWidth > 0 ? finish(true) : finish(false));
+    });
+  }
+
+  async function hydrateVisualAssetThumbnails() {
+    const nodes = Array.from(document.querySelectorAll("[data-visual-asset-path]"));
+    for (const node of nodes) {
+      if (node.dataset.loaded === "1") continue;
+      const assetPath = String(node.getAttribute("data-visual-asset-path") || "").trim();
+      const mime = String(node.getAttribute("data-visual-asset-mime") || "image/png").trim() || "image/png";
+      const personaKey = String(node.getAttribute("data-visual-asset-persona-key") || "").trim();
+      const emotion = String(node.getAttribute("data-visual-asset-emotion") || "").trim();
+      const backupId = String(node.getAttribute("data-visual-asset-backup-id") || "").trim();
+      if (!assetPath) continue;
+      try {
+        const url = await readPersonaVisualAssetUrl(assetPath, mime, { personaKey, emotion, backupId });
+        if (!url) throw new Error("미리보기 URL이 비어 있습니다.");
+        node.innerHTML = `<img alt="emotion asset">`;
+        const img = node.querySelector("img");
+        if (!img) throw new Error("미리보기 이미지 요소 생성에 실패했습니다.");
+        img.src = url;
+        await waitForVisualAssetImageLoad(img, 6000);
+        node.dataset.loaded = "1";
+        node.dataset.failed = "0";
+      } catch (error) {
+        node.dataset.failed = "1";
+        node.innerHTML = `<span>${backupId ? "불러오기 실패" : "복구 백업 없음 · 재생성 필요"}</span>`;
+        appendDebugLog("persona_visual", "image_asset_preview_failed", { assetPath, mime, personaKey, emotion, backupId, error: errorForLog(error) }, "warn");
+      }
+    }
+  }
+
+  function renderAssetPromptEditor(entry) {
+    const rawPositive = String(entry?.prompt || "").trim();
+    const rawNegative = String(entry?.negativePrompt || "").trim();
+    const positive = htmlEscape(rawPositive);
+    const negative = htmlEscape(rawNegative);
+    const positiveHash = htmlEscape(hashText(rawPositive));
+    const negativeHash = htmlEscape(hashText(rawNegative));
+    return `
+      <details class="lia-asset-prompt-details">
+        <summary>사용된 프롬프트 보기</summary>
+        <div class="lia-asset-prompt-editor">
+          <label class="lia-field lia-field-full"><span>Positive Prompt</span><textarea class="lia-guidance-textarea lia-asset-prompt-input" data-visual-asset-prompt-input="1" data-visual-asset-original-hash="${positiveHash}" spellcheck="false">${positive}</textarea></label>
+          <label class="lia-field lia-field-full"><span>Negative Prompt</span><textarea class="lia-guidance-textarea lia-asset-negative-input" data-visual-asset-negative-input="1" data-visual-asset-original-hash="${negativeHash}" spellcheck="false">${negative}</textarea></label>
+          <small>기본으로는 닫혀 있습니다. 수정하지 않고 재생성하면 최신 LIA 자동 프롬프트를 사용하고, 직접 수정한 항목만 사용자 프롬프트로 우선 적용합니다.</small>
+        </div>
+      </details>`;
+  }
+
+  function renderAssetGalleryCards(bundle, emotionOrder = []) {
+    const ordered = emotionOrder.length ? emotionOrder : Object.keys(bundle?.images || {});
+    const cards = [];
+    const seen = new Set();
+    ordered.forEach((emotion) => {
+      const entry = bundle?.images?.[emotion];
+      if (!entry) return;
+      seen.add(emotion);
+      cards.push(entry);
+    });
+    Object.values(bundle?.images || {}).forEach((entry) => { if (!seen.has(entry.emotion)) cards.push(entry); });
+    if (!cards.length) return `<div class="lia-empty-result"><div class="lia-empty-orb">🖼</div><strong>아직 저장된 감정 에셋이 없습니다.</strong><p>Neutral을 먼저 만들고 결과를 확인한 뒤 Generation Lock을 확정하세요.</p></div>`;
+    return cards.map((entry) => {
+      const stale = entry.emotion !== "neutral" && Boolean((bundle?.visualLockCandidate && !bundle?.visualLock?.confirmed) || (bundle?.visualLock?.lockHash && String(entry.lockHash || "") !== String(bundle.visualLock.lockHash || "")));
+      return `
+      <article class="lia-asset-card" data-visual-asset-card="${htmlEscape(entry.emotion)}">
+        <div class="lia-asset-thumb" data-visual-asset-path="${htmlEscape(entry.assetPath)}" data-visual-asset-mime="${htmlEscape(entry.mime || "image/png")}" data-visual-asset-persona-key="${htmlEscape(bundle?.personaKey || "")}" data-visual-asset-emotion="${htmlEscape(entry.emotion)}" data-visual-asset-backup-id="${htmlEscape(entry.backupId || "")}"><span>불러오는 중...</span></div>
+        <div class="lia-asset-meta">
+          <div class="lia-asset-meta-top"><strong>${htmlEscape(entry.emotion)}</strong>${entry.emotion === "neutral" ? `<span class="lia-asset-badge">Neutral Master</span>` : ``}${stale ? `<span class="lia-asset-badge lia-asset-stale">구형 Lock</span>` : ``}</div>
+          <small>${htmlEscape(entry.width && entry.height ? `${entry.width}×${entry.height}` : "")}${entry.seed >= 0 ? `${entry.width && entry.height ? " · " : ""}seed ${entry.seed}` : ""}</small>
+        </div>
+        ${renderAssetPromptEditor(entry)}
+        <div class="lia-asset-actions lia-asset-actions-two">
+          <button class="btn-soft" type="button" data-visual-asset-regenerate="${htmlEscape(entry.emotion)}">재생성</button>
+          <button class="btn-danger" type="button" data-visual-asset-delete="${htmlEscape(entry.emotion)}">삭제</button>
+        </div>
+      </article>`;
+    }).join("");
+  }
+
+
+  function normalizeRisuAdditionalAssets(raw) {
+    return (Array.isArray(raw) ? raw : []).map((entry) => {
+      const name = String(Array.isArray(entry) ? entry[0] : entry?.name || "").trim();
+      const path = String(Array.isArray(entry) ? entry[1] : entry?.path || "").trim();
+      const ext = String(Array.isArray(entry) ? entry[2] : entry?.ext || "png").trim().replace(/^\./, "").toLowerCase() || "png";
+      return name && path ? { name, path, ext } : null;
+    }).filter(Boolean);
+  }
+
+  function readCharacterCompatField(character, field) {
+    if (!character || !field) return undefined;
+    if (Object.prototype.hasOwnProperty.call(character, field)) return character[field];
+    if (character.data && Object.prototype.hasOwnProperty.call(character.data, field)) return character.data[field];
+    return undefined;
+  }
+
+  function writeCharacterCompatField(character, field, value) {
+    if (!character || !field) return false;
+    character[field] = value;
+    if (character.data && typeof character.data === "object") character.data[field] = value;
+    return true;
+  }
+
+  function additionalAssetTuples(list) {
+    return (Array.isArray(list) ? list : []).map((item) => item?.name && item?.path ? [String(item.name), String(item.path), String(item.ext || "png")] : null).filter(Boolean);
+  }
+
+  async function registerPersonaEmotionAssetOnCurrentCharacter(entry, recovery = {}) {
+    if (!entry?.assetPath || !entry?.assetName) return "";
+    if (typeof api.setCharacter !== "function") return "";
+    let usableEntry = entry;
+    try {
+      const ensured = await ensurePersonaVisualAssetAvailable(entry, {
+        personaKey: recovery?.personaKey,
+        emotion: recovery?.emotion || entry?.emotion,
+        backupId: entry?.backupId,
+        mime: entry?.mime,
+      });
+      if (ensured?.entry) usableEntry = ensured.entry;
+    } catch (error) {
+      appendDebugLog("persona_visual", "emotion_asset_runtime_restore_failed", { assetName: entry?.assetName, assetPath: entry?.assetPath, backupId: entry?.backupId || "", error: errorForLog(error) }, "warn");
+      return "";
+    }
+    let character = null;
+    try { if (typeof api.getCharacter === "function") character = await api.getCharacter(); } catch (_) {}
+    if (!character) {
+      try {
+        const index = Number(await api.getCurrentCharacterIndex?.()) || 0;
+        character = await api.getCharacterFromIndex?.(index);
+      } catch (_) {}
+    }
+    if (!character || typeof character !== "object") return "";
+    const next = JSON.parse(JSON.stringify(character));
+    const assets = normalizeRisuAdditionalAssets(readCharacterCompatField(next, "additionalAssets"));
+    const name = String(usableEntry.assetName).trim();
+    const path = String(usableEntry.assetPath).trim();
+    const pathExtRaw = String(path.split(".").pop() || "").replace(/^\./, "").toLowerCase();
+    const pathExt = /^(png|jpe?g|webp|gif|avif)$/.test(pathExtRaw) ? pathExtRaw.replace("jpeg", "jpg") : "";
+    const ext = pathExt || String(usableEntry.mime || "image/png").split("/").pop().replace("jpeg", "jpg") || "png";
+    const existing = assets.find((item) => item.name === name);
+    if (existing && existing.path === path) return `{{image::${name}}}`;
+    if (existing) {
+      existing.path = path;
+      existing.ext = ext;
+    } else {
+      assets.push({ name, path, ext });
+    }
+    writeCharacterCompatField(next, "additionalAssets", additionalAssetTuples(assets));
+    await api.setCharacter(next);
+    return `{{image::${name}}}`;
+  }
+
+  function normalizeEmotionKey(value) {
+    return String(value || "").trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  }
+
+  const PERSONA_EMOTION_CUES = Object.freeze({
+    angry: [["분노",3],["화가",3],["화난",3],["격분",3],["노려",2.5],["눈살",2.2],["찌푸",2.2],["이를 악",2.4],["버럭",2.5],["짜증",2],["angry",3],["furious",3],["glare",2.3],["frown",2]],
+    sad: [["슬프",3],["눈물",2.6],["울먹",2.8],["울었",2.5],["울음",2.5],["침울",2.5],["우울",2.5],["sad",3],["tear",2.3],["sorrow",2.5]],
+    embarrassed: [["부끄",3],["쑥스",3],["볼을 붉",3],["얼굴을 붉",3],["홍조",2.5],["시선을 피",1.8],["민망",2.7],["embarrassed",3],["blush",3],["shy",2]],
+    jealous: [["질투",3.5],["소유욕",3],["샘이",2.7],["삐친",2.1],["jealous",3.5],["possessive",2.7],["envy",2.5]],
+    surprised: [["놀라",3],["깜짝",3],["흠칫",2.7],["눈을 크게",2.5],["당황",1.7],["surprised",3],["startled",3],["wide eyes",2]],
+    worried: [["걱정",3],["불안",3],["초조",2.6],["긴장",1.7],["염려",2.5],["worried",3],["anxious",3],["nervous",2]],
+    determined: [["결심",3],["단호",3],["굳은 표정",2.7],["각오",2.7],["의지를",2],["determined",3],["resolve",2.5],["focused",1.4]],
+    affectionate: [["다정",3],["애정",3],["사랑스럽",2.4],["애틋",2.7],["부드러운 눈",2.3],["따뜻한 미소",2.5],["affectionate",3],["loving",3],["tender",2.5]],
+    exhausted: [["지친",3],["피곤",3],["기진맥진",3.5],["축 늘어",2.4],["무거운 눈",2],["exhausted",3],["tired",2.5],["weary",2.5]],
+    happy: [["활짝 웃",3],["환하게 웃",3],["기뻐",3],["기쁜",2.7],["즐거",2.5],["행복",2.8],["웃음을 터",2.6],["happy",3],["cheerful",2.5],["grin",2.4]],
+    "gentle smile": [["옅은 미소",3.2],["작게 미소",3],["살짝 웃",2.8],["부드럽게 웃",2.8],["잔잔한 미소",3],["gentle smile",3.2],["soft smile",3]],
+    neutral: [],
+  });
+
+  function responseFocusForPersona(content, personaName) {
+    const text = String(content || "");
+    const name = String(personaName || "").trim();
+    const chunks = text.split(/(?<=[.!?。！？\n])\s*/).map((item) => item.trim()).filter(Boolean);
+    const anchors = [name, "{{user}}", "당신은", "당신이", "당신의", "너는", "네가", "너의", "너를"].filter(Boolean);
+    const focused = [];
+    for (const chunk of chunks) {
+      if (anchors.some((anchor) => chunk.toLowerCase().includes(String(anchor).toLowerCase()))) focused.push(chunk);
+    }
+    return focused.length ? focused.join("\n") : "";
+  }
+
+  function scoreEmotionText(emotion, text) {
+    const source = String(text || "").toLowerCase();
+    if (!source) return 0;
+    const normalized = normalizeEmotionKey(emotion);
+    let score = 0;
+    if (normalized && normalized !== "neutral" && source.includes(normalized)) score += 3.5;
+    const cueList = PERSONA_EMOTION_CUES[normalized] || [];
+    for (const [cue, weight] of cueList) {
+      if (source.includes(String(cue).toLowerCase())) score += Number(weight) || 0;
+    }
+    return score;
+  }
+
+  function choosePersonaEmotionAsset(bundle, content, personaName, config) {
+    const rawImages = bundle?.images || {};
+    const activeLockHash = bundle?.visualLock?.confirmed ? String(bundle.visualLock.lockHash || "") : "";
+    const hasPendingNeutral = Boolean(bundle?.visualLockCandidate && !bundle?.visualLock?.confirmed);
+    const images = Object.fromEntries(Object.entries(rawImages).filter(([emotion, entry]) => {
+      if (normalizeEmotionKey(emotion) === "neutral") return true;
+      if (hasPendingNeutral) return false;
+      if (!activeLockHash) return true;
+      return String(entry?.lockHash || "") === activeLockHash;
+    }));
+    const emotions = Object.keys(images);
+    if (!emotions.length) return null;
+    const focus = responseFocusForPersona(content, personaName);
+    let best = null;
+    for (const emotion of emotions) {
+      if (normalizeEmotionKey(emotion) === "neutral") continue;
+      const score = scoreEmotionText(emotion, focus);
+      if (!best || score > best.score) best = { emotion, score, entry: images[emotion] };
+    }
+    const minScore = Number(config.runtimeMinScore) || 2;
+    if (best && best.score >= minScore) return { ...best, focusFound: Boolean(focus) };
+    const neutralKey = emotions.find((emotion) => normalizeEmotionKey(emotion) === "neutral");
+    if (config.runtimeNeutralFallback !== false && neutralKey) return { emotion: neutralKey, score: 0, entry: images[neutralKey], focusFound: Boolean(focus), fallback: true };
+    return null;
+  }
+
+  async function findOrMigrateVisualBundleForPersona(persona, store) {
+    const personaId = String(persona?.id || "").trim();
+    if (!personaId) return null;
+    const stableKey = `persona:${personaId}`;
+    if (store.sets?.[stableKey]) return normalizeVisualAssetSet(store.sets[stableKey], stableKey);
+    const sameId = Object.values(store.sets || {}).find((set) => String(set?.personaId || "").trim() === personaId);
+    if (sameId) return normalizeVisualAssetSet(sameId, sameId.personaKey || stableKey);
+    const name = String(persona?.name || "").trim().toLowerCase();
+    const candidates = Object.values(store.sets || {}).filter((set) => String(set?.personaName || "").trim().toLowerCase() === name && Object.keys(set?.images || {}).length);
+    if (candidates.length !== 1) return null;
+    const source = normalizeVisualAssetSet(candidates[0], candidates[0].personaKey || "");
+    const migrated = { ...source, personaKey: stableKey, personaId, personaName: String(persona?.name || source.personaName || "Persona"), assetPrefix: personaAssetPrefix(persona?.name, personaId), updatedAt: new Date().toISOString() };
+    Object.values(migrated.images).forEach((entry) => { entry.assetName = `${migrated.assetPrefix}_${emotionAssetSlug(entry.emotion)}`; });
+    const sets = { ...(store.sets || {}), [stableKey]: migrated };
+    if (source.personaKey && source.personaKey !== stableKey) delete sets[source.personaKey];
+    await writePersonaVisualAssetStore({ ...store, sets, updatedAt: new Date().toISOString() });
+    return migrated;
+  }
+
+  function buildRuntimeEmotionAssetMarkup(tag) {
+    const safeTag = String(tag || "").trim();
+    if (!safeTag) return "";
+    return [
+      '<div class="lia-inline-emotion-asset" style="display:flex;justify-content:center;align-items:center;width:100%;margin:16px auto 18px;">',
+      '  <div class="lia-inline-emotion-asset-frame" style="width:min(420px,78vw);max-width:100%;padding:10px 10px 8px;border-radius:16px;background:rgba(255,255,255,.72);box-shadow:0 10px 26px rgba(0,0,0,.08);">',
+      `    ${safeTag}`,
+      '  </div>',
+      '</div>'
+    ].join('\n');
+  }
+
+  function splitNarrativeBlocks(content) {
+    return String(content || "").replace(/\r\n/g, "\n").trimEnd().split(/\n{2,}/).map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  function splitRuntimeNarrativeEnvelope(content) {
+    const source = String(content || "");
+    if (!source) return { prefix: "", narrative: "", suffix: "", start: 0, end: 0 };
+    let start = 0;
+    const responseHeading = /(^|\n)#\s*응답\s*(?:\n|$)/i.exec(source);
+    if (responseHeading) start = responseHeading.index + responseHeading[0].length;
+    else {
+      const thoughts = /<Thoughts\b[^>]*>[\s\S]*?<\/Thoughts\s*>/i.exec(source);
+      if (thoughts && thoughts.index <= 32) start = thoughts.index + thoughts[0].length;
+    }
+    const tailPatterns = [
+      /<!--\s*HAYAKU_STATE_PACKET_START\b/i,
+      /\[LBDATA\s+START\]/i,
+      /<GT-CTRL\b/i,
+      /<lb-(?:lazy|stage|stage-marker|data)\b/i,
+    ];
+    let end = source.length;
+    const tail = source.slice(start);
+    for (const pattern of tailPatterns) {
+      const match = pattern.exec(tail);
+      if (match && start + match.index < end) end = start + match.index;
+    }
+    return {
+      prefix: source.slice(0, start),
+      narrative: source.slice(start, end),
+      suffix: source.slice(end),
+      start,
+      end,
+    };
+  }
+
+  function maskProtectedRuntimeNarrativeSections(narrative) {
+    const source = String(narrative || "");
+    const protectedSections = [];
+    const patterns = [
+      /<Thoughts\b[^>]*>[\s\S]*?<\/Thoughts\s*>/gi,
+      /<!--\s*HAYAKU_STATE_PACKET_START\b[\s\S]*?HAYAKU_STATE_PACKET_END\s*-->/gi,
+      /<!--[^]*?-->/g,
+      /\[LBDATA\s+START\][\s\S]*?\[LBDATA\s+END\]/gi,
+      /<GT-CTRL\b[^>]*\/?\s*>/gi,
+      /<lb-(?:lazy|stage|stage-marker|data)\b[^>]*\/?\s*>/gi,
+    ];
+    let masked = source;
+    for (const pattern of patterns) {
+      masked = masked.replace(pattern, (match) => {
+        const token = `__LIA_PROTECTED_${protectedSections.length}__`;
+        protectedSections.push(match);
+        return `\n\n${token}\n\n`;
+      });
+    }
+    return { masked, protectedSections };
+  }
+
+  function restoreProtectedRuntimeNarrativeSections(masked, protectedSections = []) {
+    let restored = String(masked || "");
+    for (let index = 0; index < protectedSections.length; index += 1) {
+      restored = restored.replace(`__LIA_PROTECTED_${index}__`, protectedSections[index]);
+    }
+    return restored;
+  }
+
+  function isSceneAssetCandidateBlock(block) {
+    const text = String(block || "").trim();
+    if (!text) return false;
+    if (/^#{1,6}\s/.test(text)) return false;
+    if (/^\[.*\]$/.test(text)) return false;
+    if (/^<img\s*=/.test(text)) return false;
+    if (/^\{\{image::/.test(text)) return false;
+    if (/^__LIA_PROTECTED_\d+__$/.test(text)) return false;
+    if (/^<Thoughts\b/i.test(text) || /^<!--/.test(text) || /^\[LBDATA\s+/i.test(text) || /^<GT-CTRL\b/i.test(text) || /^<lb-/i.test(text)) return false;
+    if (text.includes('HAYAKU_STATE_PACKET_START') || text.includes('HAYAKU_STATE_PACKET_END')) return false;
+    if (text.includes('lia-inline-emotion-asset')) return false;
+    return true;
+  }
+
+  function blockMentionsPersona(block, personaName) {
+    const text = String(block || "");
+    const name = String(personaName || "").trim();
+    if (!name) return false;
+    return text.toLowerCase().includes(name.toLowerCase());
+  }
+
+  function blockMayContinuePersonaScene(block, persona) {
+    const text = String(block || "").trim();
+    if (!text) return false;
+    const gender = String(persona?.gender || persona?.meta?.gender || "").trim().toLowerCase();
+    const pronouns = gender.startsWith('f') ? ['그녀', '그녀는', '그녀가', '그녀의'] : gender.startsWith('m') ? ['그는', '그가', '그의'] : [];
+    if (pronouns.some((token) => text.includes(token))) return true;
+    return /^["'“”‘’「『]|^[가-힣a-zA-Z0-9].*?["'”’]$/.test(text);
+  }
+
+  function pickSceneEmotionCandidates(blocks, bundle, persona, config) {
+    const candidates = [];
+    let lastPersonaMention = -99;
+    for (let index = 0; index < blocks.length; index += 1) {
+      const block = blocks[index];
+      if (!isSceneAssetCandidateBlock(block)) continue;
+      const mentionsPersona = blockMentionsPersona(block, persona?.name);
+      if (mentionsPersona) lastPersonaMention = index;
+      const sceneContinuation = !mentionsPersona && index - lastPersonaMention === 1 && blockMayContinuePersonaScene(block, persona);
+      if (!mentionsPersona && !sceneContinuation) continue;
+      const snippet = [blocks[index - 1], block, blocks[index + 1]].filter(Boolean).join("\n");
+      const picked = choosePersonaEmotionAsset(bundle, snippet, persona?.name, config);
+      if (!picked?.entry?.assetPath) continue;
+      const priority = Number(picked.score || 0) + (picked.fallback ? 0.15 : 1.2) + (mentionsPersona ? 0.9 : 0.2);
+      candidates.push({ index, block, picked, mentionsPersona, sceneContinuation, priority });
+    }
+    return candidates;
+  }
+
+  function selectSceneAttachmentPoints(candidates, maxAttachments) {
+    if (!candidates.length) return [];
+    const bestByIndex = new Map();
+    for (const candidate of candidates) {
+      const existing = bestByIndex.get(candidate.index);
+      if (!existing || candidate.priority > existing.priority) bestByIndex.set(candidate.index, candidate);
+    }
+    const ordered = Array.from(bestByIndex.values()).sort((a, b) => a.index - b.index);
+    const grouped = [];
+    for (const candidate of ordered) {
+      const last = grouped[grouped.length - 1];
+      if (last && candidate.index - last[last.length - 1].index <= 1) last.push(candidate);
+      else grouped.push([candidate]);
+    }
+    let selections = grouped.map((group) => group.slice().sort((a, b) => b.priority - a.priority)[0]).sort((a, b) => a.index - b.index);
+    if (selections.length <= maxAttachments) return selections;
+    const ranked = selections.slice().sort((a, b) => b.priority - a.priority).slice(0, maxAttachments);
+    const chosen = new Set(ranked.map((item) => item.index));
+    selections = selections.filter((item) => chosen.has(item.index)).sort((a, b) => a.index - b.index);
+    return selections;
+  }
+
+  async function insertRuntimeEmotionAssetsIntoScenes(content, bundle, persona, config) {
+    const body = String(content || "");
+    if (!body.trim()) return { content: body, placements: [] };
+    if (body.includes('lia-inline-emotion-asset')) return { content: body, placements: [] };
+    const envelope = splitRuntimeNarrativeEnvelope(body);
+    if (!envelope.narrative.trim()) return { content: body, placements: [] };
+    const protectedNarrative = maskProtectedRuntimeNarrativeSections(envelope.narrative);
+    const blocks = splitNarrativeBlocks(protectedNarrative.masked);
+    if (!blocks.length) return { content: body, placements: [] };
+    const candidates = pickSceneEmotionCandidates(blocks, bundle, persona, config);
+    const maxAttachments = Math.min(4, Math.max(1, Math.floor((blocks.length + 2) / 5)));
+    const selected = selectSceneAttachmentPoints(candidates, maxAttachments);
+    if (!selected.length) return { content: body, placements: [] };
+    const byIndex = new Map();
+    const placements = [];
+    for (const item of selected) {
+      const tag = await registerPersonaEmotionAssetOnCurrentCharacter(item.picked.entry, { personaKey: bundle.personaKey, emotion: item.picked.emotion });
+      if (!tag) continue;
+      const attachment = buildRuntimeEmotionAssetMarkup(tag);
+      if (!attachment) continue;
+      byIndex.set(item.index, attachment);
+      placements.push({ index: item.index, emotion: item.picked.emotion, assetName: item.picked.entry.assetName, score: item.picked.score, fallback: item.picked.fallback === true, mentionsPersona: item.mentionsPersona === true });
+    }
+    if (!byIndex.size) return { content: body, placements: [] };
+    const out = [];
+    for (let index = 0; index < blocks.length; index += 1) {
+      out.push(blocks[index]);
+      if (byIndex.has(index)) out.push(byIndex.get(index));
+    }
+    const rebuiltNarrative = restoreProtectedRuntimeNarrativeSections(out.join("\n\n"), protectedNarrative.protectedSections);
+    const rebuilt = `${envelope.prefix}${rebuiltNarrative}${envelope.suffix}`;
+    return { content: rebuilt, placements, narrativeStart: envelope.start, narrativeEnd: envelope.end };
+  }
+
+  async function handlePersonaEmotionAssetAfterRequest(content, type) {
+    if (!isNarrativePersonaProofRequest(type)) return content;
+    if (typeof content !== "string" || !content.trim()) return content;
+    try {
+      const config = await readStoredIllustrationConfig();
+      if (config.runtimeAttachEnabled === false) return content;
+      const selection = await PersonaSelectionManager.read();
+      const sourcePersonaId = String(selection?.bindingState?.sourcePersonaId || "").trim();
+      const persona = sourcePersonaId
+        ? (asArray(selection?.personas).find((item) => String(item?.id || "").trim() === sourcePersonaId) || selection?.effectivePersona)
+        : selection?.effectivePersona;
+      if (!persona?.id) return content;
+      const store = await readPersonaVisualAssetStore();
+      const bundle = await findOrMigrateVisualBundleForPersona(persona, store);
+      if (!bundle || !Object.keys(bundle.images || {}).length) return content;
+      const inserted = await insertRuntimeEmotionAssetsIntoScenes(content, bundle, persona, config);
+      if (!inserted?.placements?.length || !inserted?.content) return content;
+      appendDebugLog("persona_visual", "emotion_asset_attached", {
+        personaId: String(persona.id),
+        personaName: String(persona.name || ""),
+        attachmentCount: inserted.placements.length,
+        placements: inserted.placements.map((item) => ({ index: item.index, emotion: item.emotion, assetName: item.assetName, score: item.score, fallback: item.fallback }))
+      }, "info");
+      return inserted.content;
+    } catch (error) {
+      appendDebugLog("persona_visual", "emotion_asset_attach_failed", { error: errorForLog(error) }, "warn");
+      return content;
+    }
+  }
+
+  // Image provider architecture and provider-specific request handling follow the implementation pattern used by Eros Tower, reused with the author's permission for LIA Persona Asset Studio. LIA's default emotion-asset path intentionally uses prompt-only generation locks and does not require reference-image/custom identity nodes.
+  function renderIllustrationProviderSettings(savedConfig = {}) {
+    const config = normalizeIllustrationConfig(savedConfig || {});
+    const provider = normalizeIllustrationProviderType(config.provider);
+    return `
+      <div class="lia-panel-title"><div><span class="lia-kicker">ILLUSTRATION CONNECTION</span><h2>감정 에셋용 삽화 연결</h2></div><span>Persona Asset Studio</span></div>
+      <p class="lia-provider-attribution">이미지 프로바이더는 에로스 타워(Eros Tower)의 구현을 따라 구현했습니다. LIA 감정 에셋의 표준 생성은 Positive/Negative Prompt + Visual Generation Lock만 사용하며 별도 Reference/IPAdapter/FaceID 노드를 요구하지 않습니다.</p>
+      <div class="lia-field-grid lia-settings-grid lia-provider-advanced-grid">
+        <label class="lia-illustration-toggle lia-field-full">
+          <span class="lia-illustration-toggle-copy"><strong>삽화 기능 사용</strong><small>LIA 에셋 탭에서 감정 에셋을 생성합니다.</small></span>
+          <span class="lia-switch"><input id="dpg-img-enabled" type="checkbox"${config.enabled ? " checked" : ""}><span class="lia-switch-track" aria-hidden="true"><span class="lia-switch-knob"></span></span></span>
+        </label>
+        <label class="lia-field"><span>Provider</span><select id="dpg-img-provider">
+          <option value="wellspring-nai"${provider === "wellspring-nai" ? " selected" : ""}>Wellspring / 챈섭</option>
+          <option value="novelai"${provider === "novelai" ? " selected" : ""}>NovelAI 공식/호환</option>
+          <option value="comfyui-local"${provider === "comfyui-local" ? " selected" : ""}>ComfyUI 로컬</option>
+          <option value="custom-json"${provider === "custom-json" ? " selected" : ""}>커스텀 JSON</option>
+        </select></label>
+        <label class="lia-field"><span>Model / Preset</span><input id="dpg-img-model" type="text" value="${htmlEscape(config.model)}" placeholder="nai-diffusion-4-5-full"></label>
+        <label class="lia-field lia-field-full"><span>Endpoint URL</span><input id="dpg-img-endpoint" type="text" value="${htmlEscape(config.endpoint)}" placeholder="${htmlEscape(defaultIllustrationEndpointForProvider(provider) || "endpoint")}"></label>
+        <label class="lia-field lia-field-full"><span>API Key</span><input id="dpg-img-key" type="password" value="${htmlEscape(config.apiKey)}" placeholder="API Key"></label>
+        <label class="lia-field"><span>Key Header</span><select id="dpg-img-key-header">${[["authorization-bearer","Bearer"],["authorization-raw","Authorization raw"],["x-api-key","x-api-key"],["none","없음"]].map(([key,label]) => `<option value="${key}"${config.apiKeyHeader === key ? " selected" : ""}>${label}</option>`).join("")}</select></label>
+        <label class="lia-field"><span>Width</span><input id="dpg-img-width" type="number" min="256" step="64" value="${htmlEscape(config.width)}"></label>
+        <label class="lia-field"><span>Height</span><input id="dpg-img-height" type="number" min="256" step="64" value="${htmlEscape(config.height)}"></label>
+        <label class="lia-field"><span>Steps</span><input id="dpg-img-steps" type="number" min="1" max="150" value="${htmlEscape(config.steps)}"></label>
+        <label class="lia-field"><span>CFG</span><input id="dpg-img-cfg" type="number" min="1" max="30" step="0.1" value="${htmlEscape(config.cfg)}"></label>
+        <label class="lia-field"><span>Sampler</span><input id="dpg-img-sampler" type="text" value="${htmlEscape(config.sampler)}"></label>
+        <label class="lia-field"><span>Seed</span><input id="dpg-img-seed" type="number" step="1" value="${htmlEscape(config.seed)}"></label>
+        <label class="lia-field"><span>Timeout (ms)</span><input id="dpg-img-timeout" type="number" min="5000" step="1000" value="${htmlEscape(config.timeoutMs)}"></label>
+        <label class="lia-field"><span>Checkpoint</span><input id="dpg-img-checkpoint" type="text" value="${htmlEscape(config.checkpoint)}" placeholder="선택 사항"></label>
+        <label class="lia-field lia-field-full"><span>Style Prompt</span><textarea id="dpg-img-style" class="lia-provider-json" spellcheck="false">${htmlEscape(config.stylePrompt)}</textarea></label>
+        <label class="lia-field lia-field-full"><span>Negative Prompt</span><textarea id="dpg-img-negative" class="lia-provider-json" spellcheck="false">${htmlEscape(config.negativePrompt)}</textarea></label>
+        <label class="lia-field lia-field-full"><span>Extra Negative</span><textarea id="dpg-img-extra-negative" class="lia-provider-json" spellcheck="false">${htmlEscape(config.extraNegativePrompt)}</textarea></label>
+        <div class="lia-illustration-rule lia-field-full">
+          <span class="lia-illustration-rule-icon" aria-hidden="true">◻</span>
+          <span><strong>배경은 순백색으로 고정</strong><small>Positive에는 pure/plain white background를 강제하고, Negative에는 scenery·colored/gradient/patterned background를 자동 추가합니다.</small></span>
+        </div>
+        <div class="lia-illustration-runtime lia-field-full">
+          <div class="lia-illustration-runtime-head">
+            <span><strong>RP 응답 자동 첨부</strong><small>사전에 만든 감정 에셋만 선택하며 RP 중에는 이미지를 생성하지 않습니다.</small></span>
+          </div>
+          <label class="lia-illustration-toggle lia-illustration-toggle-compact">
+            <span class="lia-illustration-toggle-copy"><strong>감정 에셋 자동 첨부</strong><small>후처리 훅에서 응답의 감정을 판정해 기존 에셋을 첨부합니다.</small></span>
+            <span class="lia-switch"><input id="dpg-img-runtime-attach" type="checkbox"${config.runtimeAttachEnabled ? " checked" : ""}><span class="lia-switch-track" aria-hidden="true"><span class="lia-switch-knob"></span></span></span>
+          </label>
+          <label class="lia-illustration-toggle lia-illustration-toggle-compact">
+            <span class="lia-illustration-toggle-copy"><strong>애매하면 Neutral 사용</strong><small>OFF면 감정 근거가 부족한 응답에는 이미지를 첨부하지 않습니다.</small></span>
+            <span class="lia-switch"><input id="dpg-img-runtime-neutral" type="checkbox"${config.runtimeNeutralFallback ? " checked" : ""}><span class="lia-switch-track" aria-hidden="true"><span class="lia-switch-knob"></span></span></span>
+          </label>
+          <label class="lia-field lia-illustration-score"><span>감정 판정 최소 점수</span><input id="dpg-img-runtime-score" type="number" min="0.5" max="20" step="0.5" value="${htmlEscape(config.runtimeMinScore)}"><small>높을수록 감정 에셋을 더 보수적으로 선택합니다.</small></label>
+        </div>
+      </div>
+      <details class="lia-provider-advanced"${provider === "custom-json" || provider === "comfyui-local" ? " open" : ""}>
+        <summary>Provider 고급 설정</summary>
+        <div class="lia-field-grid lia-settings-grid lia-provider-advanced-grid">
+          <label class="lia-field lia-field-full"><span>Extra Headers JSON</span><textarea id="dpg-img-headers" class="lia-provider-json" spellcheck="false" placeholder='{"X-Custom":"value"}'>${htmlEscape(config.headersJson)}</textarea></label>
+          <label class="lia-field lia-field-full"><span>Response Path (JSON 응답일 때)</span><input id="dpg-img-response-path" type="text" value="${htmlEscape(config.responsePath)}" placeholder="data.0.image"></label>
+          <label class="lia-field lia-field-full"><span>Custom Request Template JSON</span><textarea id="dpg-img-request-template" class="lia-provider-json" spellcheck="false" placeholder='{"prompt":"{{prompt}}","negative_prompt":"{{negative}}"}'>${htmlEscape(config.requestTemplateJson)}</textarea></label>
+          <label class="lia-field lia-field-full"><span>ComfyUI Workflow JSON</span><textarea id="dpg-img-workflow" class="lia-provider-json" spellcheck="false" placeholder='{"prompt":{...},"client_id":"lia"}'>${htmlEscape(config.workflowJson)}</textarea></label>
+          <label class="lia-field lia-field-full"><span>Advanced JSON</span><textarea id="dpg-img-advanced" class="lia-provider-json" spellcheck="false" placeholder='{"sm":true}'>${htmlEscape(config.advancedJson)}</textarea></label>
+        </div>
+      </details>
+      <div class="lia-actions lia-settings-actions lia-provider-actions">
+        <button id="dpg-save-img-config" class="btn-primary" type="button">삽화 설정 저장</button>
+      </div>`;
+  }
+
+  function renderAssetStudioPanel(ctx = {}) {
+    const target = resolvePersonaVisualTarget(ctx);
+    const targetOptions = listSelectablePersonaVisualTargets(ctx);
+    const selectedTargetValue = currentVisualTargetSelectionValue();
+    const bundle = target.bundle || normalizeVisualAssetSet({}, target.personaKey);
+    const emotions = (preservedVisualEmotionText || "").trim() || "neutral\ngentle smile\nhappy\nangry\nsad\nembarrassed\njealous\nsurprised\nworried\ndetermined\naffectionate\nexhausted";
+    const gallery = renderAssetGalleryCards(bundle, unique(emotions.split(/\r?\n|,/).map((item) => String(item || "").trim()).filter(Boolean), 24));
+    return `
+      <section class="lia-page-hero lia-asset-hero"><span class="lia-section-eyebrow">PERSONA ASSET STUDIO</span><h2>감정 에셋</h2><p>Neutral을 Visual Master로 먼저 만들고 생성 조건을 확정한 뒤, 같은 Positive/Negative Prompt·seed·sampling·구도 조건에서 표정만 바꿔 감정 에셋을 만듭니다. 별도 Reference 노드는 필요하지 않습니다.</p></section>
+      <section class="lia-asset-page-grid">
+        <aside class="lia-panel lia-asset-config-panel">
+          <div class="lia-panel-title"><div><span class="lia-kicker">TARGET</span><h2>${htmlEscape(target.personaName)}</h2></div><span>${htmlEscape(target.displaySource)}</span></div>
+          <label class="lia-field lia-field-full"><span>에셋 타겟 Persona</span><select id="dpg-asset-target-persona">${targetOptions.map((item) => `<option value="${htmlEscape(item.value)}"${item.value === selectedTargetValue ? " selected" : ""}>${htmlEscape(item.label)}</option>`).join("")}</select><small>기본값은 현재 Source Persona 자동입니다. 여기서 다른 Persona를 직접 골라 해당 Persona 전용 감정 에셋을 만들 수 있습니다.</small></label>
+          <div class="lia-context-strip"><span><b>Parent</b>${htmlEscape(target.personaId ? `persona:${target.personaId}` : target.personaKey)}</span><span><b>Prefix</b>${htmlEscape(target.assetPrefix)}</span></div>
+          <div class="lia-context-stack">
+            <div class="lia-preview-box"><h3>대상 요약</h3><p>${htmlEscape(target.identitySummary || target.personaSpec?.appearance || target.facts?.sourceDigest || "시각 요약을 아직 찾지 못했습니다.")}</p></div>
+            <div class="lia-preview-box"><h3>저장 상태</h3><p>${htmlEscape(Object.keys(bundle.images || {}).length ? `${Object.keys(bundle.images || {}).length}개 저장됨 · Neutral Master ${bundle.images?.neutral ? "있음" : "없음"}` : "저장된 감정 에셋 없음")}</p></div>
+            <div class="lia-preview-box"><h3>Visual Generation Lock</h3><p>${htmlEscape(bundle.visualLock?.confirmed ? `확정됨 · seed ${bundle.visualLock.seed} · ${bundle.visualLock.width}×${bundle.visualLock.height} · ${bundle.visualLock.sampler} · ${visualCompositionPresetDefinition(bundle.visualLock.compositionPreset).label}` : bundle.visualLockCandidate ? `Neutral 생성 완료 · 기준 확정 필요 · ${visualCompositionPresetDefinition(bundle.visualLockCandidate?.compositionPreset).label}` : "미생성 · 먼저 Neutral을 만드세요")}</p></div>
+            <div class="lia-preview-box"><h3>배경 규칙</h3><p>순백색 고정 · Positive/Negative Prompt 양쪽에서 강제 · 투명/장면 배경 사용 안 함</p></div>
+          </div>
+          <label class="lia-field lia-field-full"><span>감정 목록</span><textarea id="dpg-asset-emotions" class="lia-guidance-textarea" spellcheck="false" placeholder="neutral\nhappy\nangry">${htmlEscape(emotions)}</textarea><small>Neutral은 Visual Master입니다. 나머지는 확정된 생성 조건을 그대로 쓰고 표정만 바꿉니다.</small></label>
+          <label class="lia-field lia-field-full"><span>추가 스타일 메모</span><textarea id="dpg-asset-style-notes" class="lia-guidance-textarea" spellcheck="false" placeholder="예: 셀 애니풍, 선이 또렷하게">${htmlEscape(preservedVisualStyleNotes || "")}</textarea><small>Neutral 생성 시 Generation Lock 후보에 포함됩니다. 기준 확정 뒤에는 감정별로 변경되지 않습니다.</small></label>
+          <label class="lia-field"><span>구도 프리셋</span><select id="dpg-asset-composition-preset">${["standard_waist_up","bust_close","half_body"].map((key) => { const def = visualCompositionPresetDefinition(key); return `<option value="${key}"${normalizeVisualCompositionPreset(preservedVisualCompositionPreset || "standard_waist_up") === key ? " selected" : ""}>${htmlEscape(def.label)}</option>`; }).join("")}</select><small>Neutral 기준 확정 시 이 구도가 Visual Generation Lock에 저장되고 모든 감정 에셋에 동일하게 적용됩니다.</small></label>
+          <label class="lia-field lia-field-full"><span>구도 세부 메모</span><textarea id="dpg-asset-composition-notes" class="lia-guidance-textarea" spellcheck="false" placeholder="예: 머리 위 여백은 좁게, 양 어깨가 보이게, 손은 프레임 밖으로">${htmlEscape(preservedVisualCompositionNotes || "")}</textarea><small>필요할 때만 씁니다. Neutral 생성 시 구도 Lock 후보에 포함됩니다.</small></label>
+          <div class="lia-asset-lock-flow">
+            <div class="lia-asset-step ${bundle.images?.neutral ? "done" : "active"}"><b>1</b><span>Neutral 생성</span></div>
+            <div class="lia-asset-step ${bundle.visualLock?.confirmed ? "done" : bundle.visualLockCandidate ? "active" : ""}"><b>2</b><span>기준 확정</span></div>
+            <div class="lia-asset-step ${bundle.visualLock?.confirmed ? "active" : ""}"><b>3</b><span>감정 묶음</span></div>
+          </div>
+          <div class="lia-asset-batch-actions">
+            <button id="dpg-asset-generate-neutral" class="btn-primary" type="button">${bundle.images?.neutral ? "Neutral 다시 만들기" : "Neutral 기준 에셋 만들기"}</button>
+            <button id="dpg-asset-confirm-lock" class="btn-soft" type="button"${bundle.visualLockCandidate ? "" : " disabled"}>Neutral 기준 확정</button>
+            <button id="dpg-asset-generate-batch" class="btn-soft" type="button"${bundle.visualLock?.confirmed ? "" : " disabled"}>감정 묶음 생성</button>
+            <button id="dpg-asset-discard-bundle" class="btn-danger" type="button"${Object.keys(bundle.images || {}).length || bundle.visualLock || bundle.visualLockCandidate ? "" : " disabled"}>감정 묶음 전체 폐기</button>
+          </div>
+        </aside>
+        <main class="lia-panel lia-asset-gallery-panel">
+          <div class="lia-panel-title"><div><span class="lia-kicker">GALLERY</span><h2>저장된 감정 에셋</h2></div><span>${htmlEscape(Object.keys(bundle.images || {}).length.toString())}</span></div>
+          <div class="lia-asset-gallery">${gallery}</div>
+        </main>
+      </section>`;
+  }
+
+  function syncIllustrationProviderUi() {
+    const provider = normalizeIllustrationProviderType(document.getElementById("dpg-img-provider")?.value || "wellspring-nai");
+    const workflow = document.getElementById("dpg-img-workflow")?.closest("label");
+    const request = document.getElementById("dpg-img-request-template")?.closest("label");
+    const responsePath = document.getElementById("dpg-img-response-path")?.closest("label");
+    if (workflow) workflow.style.display = provider === "comfyui-local" ? "grid" : "none";
+    if (request) request.style.display = provider === "custom-json" ? "grid" : "none";
+    if (responsePath) responsePath.style.display = provider === "custom-json" ? "grid" : "none";
+    const endpoint = document.getElementById("dpg-img-endpoint");
+    if (endpoint && !String(endpoint.value || "").trim()) endpoint.placeholder = defaultIllustrationEndpointForProvider(provider) || "endpoint";
+    const masterEnabled = document.getElementById("dpg-img-enabled")?.checked !== false;
+    for (const id of ["dpg-img-runtime-attach", "dpg-img-runtime-neutral", "dpg-img-runtime-score"]) {
+      const el = document.getElementById(id);
+      if (el) el.disabled = !masterEnabled;
+    }
+    document.querySelectorAll(".lia-illustration-runtime .lia-illustration-toggle, .lia-illustration-runtime .lia-illustration-score").forEach((el) => {
+      el.classList.toggle("is-disabled", !masterEnabled);
+    });
+  }
+
+  async function bindVisualAssetStudioUi(ctx) {
+    await hydrateVisualAssetThumbnails();
+    document.getElementById("dpg-img-provider")?.addEventListener("change", syncIllustrationProviderUi);
+    document.getElementById("dpg-img-enabled")?.addEventListener("change", syncIllustrationProviderUi);
+    document.getElementById("dpg-asset-target-persona")?.addEventListener("change", async (event) => {
+      preservedVisualTargetPersonaId = String(event?.target?.value || "__auto__").trim() || "__auto__";
+      activeWorkspaceTab = "assets";
+      await refreshPreview({ skipCapture: true });
+      const freshCtx = await getContext().catch(() => ctx);
+      const freshTarget = resolvePersonaVisualTarget(freshCtx);
+      setStatus(`감정 에셋 타겟을 '${freshTarget.personaName}'(${freshTarget.displaySource})로 변경했습니다.`, "ok");
+    });
+    document.getElementById("dpg-asset-emotions")?.addEventListener("input", (event) => { preservedVisualEmotionText = String(event?.target?.value || ""); });
+    document.getElementById("dpg-asset-style-notes")?.addEventListener("input", (event) => { preservedVisualStyleNotes = String(event?.target?.value || ""); });
+    document.getElementById("dpg-asset-composition-preset")?.addEventListener("change", (event) => { preservedVisualCompositionPreset = normalizeVisualCompositionPreset(String(event?.target?.value || "standard_waist_up")); });
+    document.getElementById("dpg-asset-composition-notes")?.addEventListener("input", (event) => { preservedVisualCompositionNotes = String(event?.target?.value || ""); });
+    document.getElementById("dpg-save-img-config")?.addEventListener("click", async () => {
+      try {
+        const saved = await writeStoredIllustrationConfig(readIllustrationConfig());
+        syncIllustrationProviderUi();
+        const comfyMode = saved.provider === "comfyui-local" && saved.workflowJson ? (findSoyaPromptParserBinding(parseOptionalJsonObject(saved.workflowJson)) ? " / Workflow: Soya 자동 호환" : " / Workflow: API JSON") : "";
+        setStatus(`삽화 설정을 저장했습니다. Provider: ${saved.provider}${saved.model && !looksLikeComfyWorkflowText(saved.model) ? ` / Model: ${saved.model}` : ""}${comfyMode}`, "ok");
+      } catch (error) {
+        setStatus(`삽화 설정 저장 실패: ${error?.message || error}`, "error");
+      }
+    });
+    document.getElementById("dpg-asset-generate-neutral")?.addEventListener("click", async () => {
+      const button = document.getElementById("dpg-asset-generate-neutral");
+      if (button) button.disabled = true;
+      activeWorkspaceTab = "assets";
+      try {
+        setStatus("Neutral 기준 감정 에셋을 생성하는 중...", "info");
+        const result = await generatePersonaVisualEmotion(ctx, "neutral");
+        await refreshPreview({ skipCapture: true });
+        setStatus(`Neutral을 저장했습니다: ${result.target.personaName} · neutral. 결과를 확인한 뒤 ‘Neutral 기준 확정’을 눌러 주세요.`, "ok");
+      } catch (error) {
+        setStatus(`Neutral 에셋 생성 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (button) button.disabled = false;
+      }
+    });
+    document.getElementById("dpg-asset-confirm-lock")?.addEventListener("click", async () => {
+      const button = document.getElementById("dpg-asset-confirm-lock");
+      if (button) button.disabled = true;
+      activeWorkspaceTab = "assets";
+      try {
+        const freshCtx = { ...ctx, visualAssetStore: await readPersonaVisualAssetStore() };
+        const target = resolvePersonaVisualTarget(freshCtx);
+        const bundle = await confirmPersonaVisualGenerationLock(target);
+        await refreshPreview({ skipCapture: true });
+        setStatus(`Neutral 기준을 확정했습니다. seed ${bundle.visualLock?.seed ?? "-"} · 구도 ${visualCompositionPresetDefinition(bundle.visualLock?.compositionPreset).label} · 이후 감정 에셋은 표정만 변경합니다.`, "ok");
+      } catch (error) {
+        setStatus(`Neutral 기준 확정 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (button) button.disabled = false;
+      }
+    });
+    document.getElementById("dpg-asset-generate-batch")?.addEventListener("click", async () => {
+      const button = document.getElementById("dpg-asset-generate-batch");
+      if (button) button.disabled = true;
+      activeWorkspaceTab = "assets";
+      const emotions = readVisualEmotionListFromUi();
+      try {
+        const queue = unique(emotions.filter((emotion) => String(emotion || "").trim().toLowerCase() !== "neutral"), 24);
+        if (!queue.length) throw new Error("Neutral 외에 생성할 감정이 없습니다.");
+        for (let index = 0; index < queue.length; index += 1) {
+          const emotion = queue[index];
+          setStatus(`[${index + 1}/${queue.length}] ${emotion} 감정 에셋 생성 중...`, "info");
+          await generatePersonaVisualEmotion(ctx, emotion);
+        }
+        await refreshPreview({ skipCapture: true });
+        setStatus(`감정 에셋 ${queue.length}개를 생성/갱신했습니다.`, "ok");
+      } catch (error) {
+        setStatus(`감정 묶음 생성 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (button) button.disabled = false;
+      }
+    });
+    document.getElementById("dpg-asset-discard-bundle")?.addEventListener("click", async () => {
+      const button = document.getElementById("dpg-asset-discard-bundle");
+      if (button) button.disabled = true;
+      activeWorkspaceTab = "assets";
+      try {
+        const freshCtx = { ...ctx, visualAssetStore: await readPersonaVisualAssetStore() };
+        const target = resolvePersonaVisualTarget(freshCtx);
+        const bundle = target.bundle || normalizeVisualAssetSet({}, target.personaKey);
+        const count = Object.keys(bundle.images || {}).length;
+        const confirmed = typeof globalThis.confirm === "function"
+          ? globalThis.confirm(`'${target.personaName}'의 감정 에셋 묶음 전체를 폐기할까요?\n\nNeutral, 감정 에셋 ${count}개, Visual Generation Lock 정보가 모두 제거됩니다. 실제 asset 파일 자체는 RisuAI 공개 API 제한으로 삭제되지 않을 수 있습니다.`)
+          : true;
+        if (!confirmed) {
+          setStatus("감정 묶음 전체 폐기를 취소했습니다.", "info");
+          return;
+        }
+        const result = await discardPersonaVisualAssetBundle(target);
+        await refreshPreview({ skipCapture: true });
+        if (result.removed) setStatus(`${target.personaName}의 감정 묶음 전체를 폐기했습니다. 에셋 참조 ${result.assetCount}개와 Visual Lock을 제거했습니다.`, "ok");
+        else setStatus(`${target.personaName}에 폐기할 감정 묶음이 없습니다.`, "info");
+      } catch (error) {
+        setStatus(`감정 묶음 전체 폐기 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (button && document.body?.contains(button)) button.disabled = false;
+      }
+    });
+    function readAssetPromptOverridesFromCard(button) {
+      const card = button?.closest?.(".lia-asset-card");
+      if (!card) return { promptOverride: "", negativePromptOverride: "" };
+      const promptEl = card.querySelector("[data-visual-asset-prompt-input]");
+      const negativeEl = card.querySelector("[data-visual-asset-negative-input]");
+      const currentPrompt = String(promptEl?.value || "").trim();
+      const currentNegative = String(negativeEl?.value || "").trim();
+      const originalPromptHash = String(promptEl?.getAttribute("data-visual-asset-original-hash") || "").trim();
+      const originalNegativeHash = String(negativeEl?.getAttribute("data-visual-asset-original-hash") || "").trim();
+      const promptChanged = Boolean(currentPrompt && (!originalPromptHash || hashText(currentPrompt) !== originalPromptHash));
+      const negativeChanged = Boolean(currentNegative && (!originalNegativeHash || hashText(currentNegative) !== originalNegativeHash));
+      return {
+        promptOverride: promptChanged ? currentPrompt : "",
+        negativePromptOverride: negativeChanged ? currentNegative : "",
+      };
+    }
+    document.querySelectorAll("[data-visual-asset-regenerate]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const emotion = String(button.getAttribute("data-visual-asset-regenerate") || "").trim();
+        if (!emotion) return;
+        button.disabled = true;
+        activeWorkspaceTab = "assets";
+        try {
+          const overrides = readAssetPromptOverridesFromCard(button);
+          setStatus(`${emotion} 에셋을 다시 생성하는 중...`, "info");
+          await generatePersonaVisualEmotion(ctx, emotion, overrides);
+          await refreshPreview({ skipCapture: true });
+          setStatus(`${emotion} 감정 에셋을 갱신했습니다.`, "ok");
+        } catch (error) {
+          setStatus(`감정 에셋 재생성 실패: ${error?.message || error}`, "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+    document.querySelectorAll("[data-visual-asset-delete]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const emotion = String(button.getAttribute("data-visual-asset-delete") || "").trim();
+        if (!emotion) return;
+        button.disabled = true;
+        try {
+          const target = resolvePersonaVisualTarget(ctx);
+          await removePersonaVisualAsset(target, emotion);
+          await refreshPreview({ skipCapture: true });
+          setStatus(`${emotion} 감정 에셋 메타데이터를 삭제했습니다.`, "ok");
+        } catch (error) {
+          setStatus(`감정 에셋 삭제 실패: ${error?.message || error}`, "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+    syncIllustrationProviderUi();
   }
 
   function setStatus(message, tone = "info") {
@@ -11294,6 +14162,7 @@ ${revisionText}`);
     document.querySelectorAll(".dpg-tab-button[data-workspace-tab]").forEach((button) => {
       button.addEventListener("click", () => activateTab(String(button.getAttribute("data-workspace-tab") || "generate")));
     });
+    void bindVisualAssetStudioUi(ctx);
     syncProviderUi();
     syncLLMSaveMode();
   }
@@ -11367,7 +14236,7 @@ ${revisionText}`);
   }
 
   function activateTab(name) {
-    const normalized = ["generate", "edit", "realtime", "vault", "settings"].includes(name) ? name : "generate";
+    const normalized = ["generate", "edit", "realtime", "assets", "vault", "settings"].includes(name) ? name : "generate";
     activeWorkspaceTab = normalized;
     if (normalized !== "generate") preservedWorldDrawerOpen = false;
     const layout = document.querySelector(".lia-app-layout");
@@ -11378,9 +14247,15 @@ ${revisionText}`);
     document.querySelectorAll(".dpg-tab-button[data-workspace-tab]").forEach((button) => {
       button.classList.toggle("active", String(button.getAttribute("data-workspace-tab") || "") === normalized);
     });
-    document.getElementById("dpg-studio-panel")?.classList.toggle("active", ["generate", "edit", "realtime"].includes(normalized));
-    document.getElementById("dpg-vault-panel")?.classList.toggle("active", normalized === "vault");
-    document.getElementById("dpg-settings-panel")?.classList.toggle("active", normalized === "settings");
+    const panelState = {
+      "dpg-studio-panel": ["generate", "edit", "realtime"].includes(normalized),
+      "dpg-assets-panel": normalized === "assets",
+      "dpg-vault-panel": normalized === "vault",
+      "dpg-settings-panel": normalized === "settings",
+    };
+    for (const [panelId, isActive] of Object.entries(panelState)) {
+      document.getElementById(panelId)?.classList.toggle("active", isActive);
+    }
   }
   function bindAction(id, fn) {
     const button = document.getElementById(id);
@@ -12235,6 +15110,65 @@ ${revisionText}`);
           .lia-live-status-grid { grid-template-columns:minmax(0,1fr); }
           .lia-evolution-evidence, .lia-evolution-summary { align-items:stretch; flex-direction:column; }
         }
+        .lia-provider-attribution { margin: 0 0 14px; color: var(--lia-muted); font-size: 10px; line-height: 1.5; }
+        .lia-asset-page-grid { display:grid; grid-template-columns:minmax(320px, 380px) minmax(0,1fr); gap:14px; }
+        .lia-asset-hero { margin-bottom: 16px; }
+        .lia-asset-config-panel, .lia-asset-gallery-panel { min-height: 200px; }
+        .lia-asset-batch-actions { display:grid; gap:8px; margin-top: 8px; }
+        .lia-asset-gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px; }
+        .lia-asset-card { display:grid; gap:10px; padding:12px; border:1px solid var(--lia-line); border-radius:16px; background: rgba(255,255,255,.03); }
+        .lia-asset-prompt-details { border:1px solid rgba(255,255,255,.08); border-radius:12px; background: rgba(255,255,255,.02); overflow:hidden; }
+        .lia-asset-prompt-details > summary { cursor:pointer; list-style:none; padding:10px 12px; font-weight:700; color: var(--lia-text); }
+        .lia-asset-prompt-details > summary::-webkit-details-marker { display:none; }
+        .lia-asset-prompt-details[open] > summary { border-bottom:1px solid rgba(255,255,255,.08); }
+        .lia-asset-prompt-editor { display:grid; gap:10px; padding:12px; }
+        .lia-asset-prompt-editor textarea { min-height: 120px; }
+        .lia-asset-thumb { aspect-ratio: 3 / 4; border-radius:14px; overflow:hidden; border:1px solid var(--lia-line); background:#0b111a; display:grid; place-items:center; color:var(--lia-muted); font-size:11px; }
+        .lia-asset-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+        .lia-asset-meta { display:grid; gap:4px; }
+        .lia-asset-meta-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+        .lia-asset-meta strong { font-size:13px; }
+        .lia-asset-meta small { color:var(--lia-muted); font-size:10px; }
+        .lia-asset-badge { padding:4px 8px; border-radius:999px; background:rgba(138,168,255,.16); color:#dce5ff; font-size:10px; font-weight:800; border:1px solid rgba(138,168,255,.32); }
+        .lia-asset-actions { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:6px; }
+        .lia-asset-actions-two { grid-template-columns: repeat(2, minmax(0,1fr)); }
+        .lia-asset-actions button { min-height:36px; font-size:10px; font-weight:800; }
+        .lia-asset-stale { border-color: rgba(247,200,115,.35); background: rgba(247,200,115,.10); color: #ffe4a8; }
+        .lia-asset-lock-flow { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:6px; margin:12px 0 4px; }
+        .lia-asset-step { display:flex; align-items:center; gap:7px; padding:8px; border:1px solid var(--lia-line); border-radius:11px; color:var(--lia-muted); font-size:10px; }
+        .lia-asset-step b { width:20px; height:20px; display:grid; place-items:center; border-radius:50%; background:rgba(255,255,255,.05); }
+        .lia-asset-step.active { border-color:rgba(138,168,255,.38); color:#dce5ff; }
+        .lia-asset-step.done { border-color:rgba(110,231,183,.28); color:#b8f5da; }
+        .lia-illustration-toggle { min-width:0; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:13px 14px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(255,255,255,.025); cursor:pointer; box-sizing:border-box; }
+        .lia-illustration-toggle:hover { border-color:rgba(138,168,255,.30); background:rgba(138,168,255,.045); }
+        .lia-illustration-toggle-copy { min-width:0; display:grid; gap:4px; }
+        .lia-illustration-toggle-copy strong { color:var(--lia-text); font-size:11px; line-height:1.35; }
+        .lia-illustration-toggle-copy small { color:var(--lia-muted); font-size:9px; line-height:1.45; font-weight:500; }
+        .lia-switch { position:relative; flex:0 0 auto; width:42px; height:24px; display:block; }
+        .lia-switch input { position:absolute; inset:0; width:100%; height:100%; opacity:0; margin:0; cursor:pointer; z-index:2; }
+        .lia-switch-track { position:absolute; inset:0; display:block; border-radius:999px; background:rgba(148,163,184,.20); border:1px solid rgba(148,163,184,.28); transition:.18s ease; }
+        .lia-switch-knob { position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#cbd5e1; box-shadow:0 2px 8px rgba(0,0,0,.28); transition:.18s ease; }
+        .lia-switch input:checked + .lia-switch-track { background:rgba(124,145,255,.80); border-color:rgba(157,173,255,.95); }
+        .lia-switch input:checked + .lia-switch-track .lia-switch-knob { transform:translateX(18px); background:#fff; }
+        .lia-switch input:focus-visible + .lia-switch-track { outline:2px solid rgba(138,168,255,.75); outline-offset:2px; }
+        .lia-illustration-rule { display:flex; align-items:flex-start; gap:10px; padding:12px 13px; border:1px solid rgba(110,231,183,.18); border-radius:13px; background:rgba(110,231,183,.045); box-sizing:border-box; }
+        .lia-illustration-rule-icon { flex:0 0 auto; width:22px; height:22px; display:grid; place-items:center; border-radius:7px; background:rgba(110,231,183,.10); color:#b8f5da; font-size:11px; }
+        .lia-illustration-rule > span:last-child { display:grid; gap:4px; min-width:0; }
+        .lia-illustration-rule strong { color:var(--lia-text); font-size:10px; }
+        .lia-illustration-rule small { color:var(--lia-muted); font-size:9px; line-height:1.45; }
+        .lia-illustration-runtime { display:grid; gap:9px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(3,7,18,.24); box-sizing:border-box; }
+        .lia-illustration-runtime-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:0 2px 2px; }
+        .lia-illustration-runtime-head > span { display:grid; gap:4px; }
+        .lia-illustration-runtime-head strong { color:var(--lia-text); font-size:11px; }
+        .lia-illustration-runtime-head small { color:var(--lia-muted); font-size:9px; line-height:1.45; }
+        .lia-illustration-toggle-compact { padding:10px 11px; border-radius:12px; background:rgba(255,255,255,.018); }
+        .lia-illustration-score { margin-top:1px; }
+        .lia-illustration-runtime .is-disabled { opacity:.45; pointer-events:none; }
+        .lia-fixed-rule { border-color:rgba(255,255,255,.18); background:rgba(255,255,255,.04); }
+        .lia-inline-emotion-asset img { display:block; width:100%; max-width:100%; height:auto; margin:0 auto; border-radius:12px; }
+        .lia-inline-emotion-asset-frame img { display:block; width:100%; max-width:100%; height:auto; margin:0 auto; border-radius:12px; }
+        @media (max-width: 1080px) { .lia-asset-page-grid { grid-template-columns: 1fr; } }
+
       </style>
       <main class="lia-shell">
         <header class="lia-header">
@@ -12326,6 +15260,7 @@ ${revisionText}`);
     liveSyncTimer = null;
     if (personaProofBadgeTimer) clearInterval(personaProofBadgeTimer);
     personaProofBadgeTimer = null;
+    revokeVisualAssetObjectUrls();
     if (liveSyncOutputDebounce) clearTimeout(liveSyncOutputDebounce);
     liveSyncOutputDebounce = null;
     try { await unregisterLiaHandoffIpc(); } catch (_) {}
