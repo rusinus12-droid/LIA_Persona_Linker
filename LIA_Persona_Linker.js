@@ -1,8 +1,10 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.26.17
+//@version 0.26.24
 
+/* v0.26.24 fixes Emotion Asset ZIP export when the already-resolved visual target is re-resolved without a full Persona context. */
+/* v0.26.23 hardens random Persona candidate generation against truncated Ollama Cloud/reasoning output and preserves provider completion diagnostics. */
 /* v0.25.3 fixes Persona Asset Studio preview crashes when a Source Persona has no canonical role/personality PersonaSpec fields. */
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/LIA_Persona_Linker/refs/heads/main/LIA_Persona_Linker.js
 //@allowed-ipc flashback_hayaku_bridge
@@ -55,16 +57,22 @@
   const LOG_STORAGE_KEY = "liaPersonaLinkerLogsV1";
   const ILLUSTRATION_CONFIG_STORAGE_KEY = "liaPersonaIllustrationConfigV1";
   const PERSONA_VISUAL_ASSET_STORAGE_KEY = "liaPersonaVisualAssetStoreV1";
+  const PERSONA_VISUAL_ASSET_PRESET_STORAGE_KEY = "liaPersonaVisualAssetPresetStoreV1";
   const PERSONA_VISUAL_ASSET_BACKUP_PREFIX = "liaPersonaVisualAssetBlobV1::";
   const PERSONA_VISUAL_ASSET_BACKUP_VERSION = 1;
   const PERSONA_VISUAL_ASSET_BACKUP_CHUNK_CHARS = 480000;
-  const ILLUSTRATION_CONFIG_VERSION = 2;
+  const ILLUSTRATION_CONFIG_VERSION = 3;
   const PERSONA_VISUAL_ASSET_VERSION = 2;
+  const PERSONA_VISUAL_ASSET_PRESET_VERSION = 1;
+  const PERSONA_VISUAL_ASSET_PRESET_MAX = 40;
+  const COMFY_BINDING_PROFILE_SCHEMA = "lia.comfy_workflow_binding.v1";
+  const COMFY_BINDING_PROFILE_VERSION = 1;
+  const PERSONA_VISUAL_ASSET_EXPORT_SCHEMA = "lia.persona_visual_asset_bundle.v1";
   const LOG_SCHEMA_VERSION = 1;
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-  const PLUGIN_VERSION = "0.26.17";
+  const PLUGIN_VERSION = "0.26.24";
   const PERSONA_PROOF_VERSION = 1;
   const PERSONA_PROOF_MAX_SCOPES = 96;
   const PERSONA_PROOF_BADGE_REFRESH_MS = 5000;
@@ -139,6 +147,8 @@
   let preservedVisualCompositionPreset = "standard_waist_up";
   let preservedVisualCompositionNotes = "";
   let preservedVisualTargetPersonaId = "__auto__";
+  let preservedVisualAssetPresetStore = { version: 1, updatedAt: "", items: [] };
+  let preservedVisualAssetPresetId = "";
   let visualAssetPreviewUrlCache = new Map();
   let visualAssetObjectUrls = new Set();
   let preservedPersonaEvolutionSelection = new Set();
@@ -656,6 +666,29 @@
       return true;
     } catch (error) {
       appendDebugLog("diagnostics", "debug_download_failed", { error: errorForLog(error) }, "error");
+      return false;
+    }
+  };
+
+
+  const downloadBinary = (name, payload, mime = "application/octet-stream") => {
+    if (typeof Blob === "undefined" || typeof URL === "undefined" || typeof document === "undefined" || !document.body) return false;
+    try {
+      const blob = payload instanceof Blob ? payload : new Blob([payload], { type: mime || "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = name;
+      document.body.appendChild(anchor);
+      anchor.click();
+      if (typeof anchor.remove === "function") anchor.remove();
+      else if (anchor.parentNode) anchor.parentNode.removeChild(anchor);
+      setTimeout(() => {
+        try { URL.revokeObjectURL(url); } catch (_) {}
+      }, 1000);
+      return true;
+    } catch (error) {
+      appendDebugLog("persona_visual", "asset_bundle_download_failed", { error: errorForLog(error) }, "error");
       return false;
     }
   };
@@ -4990,6 +5023,35 @@ ${revisionText}`);
     return candidates;
   }
 
+  function inspectRandomCandidateOutput(raw) {
+    const text = stripCodeFence(raw).replace(/^\uFEFF/, "").trim();
+    const parsed = parseJsonValueFlexible(text);
+    const source = Array.isArray(parsed) ? parsed : asArray(parsed?.candidates || parsed?.candidateList || parsed?.candidate_list || parsed?.personas || parsed?.options);
+    let strictJsonComplete = false;
+    if (text) {
+      try {
+        JSON.parse(text);
+        strictJsonComplete = true;
+      } catch (_) {}
+    }
+    return {
+      chars: text.length,
+      rawCandidateCount: source.length,
+      strictJsonComplete,
+      startsLikeJson: /^[\[{]/.test(text),
+    };
+  }
+
+  function randomCandidateRecoveryQuality(raw, candidates = null) {
+    const inspection = inspectRandomCandidateOutput(raw);
+    const validCandidates = candidates || normalizeRandomCandidateBundle(raw);
+    return {
+      ...inspection,
+      validCandidateCount: validCandidates.length,
+      score: validCandidates.length * 100000 + inspection.rawCandidateCount * 10000 + (inspection.strictJsonComplete ? 1000 : 0) + Math.min(999, inspection.chars),
+    };
+  }
+
   function normalizeCharacterCandidate(raw) {
     const parsed = parseJsonObject(raw);
     if (!parsed) return null;
@@ -5741,28 +5803,135 @@ ${revisionText}`);
       ctx = { ...ctx, worldBlueprintKey: blueprintState.key, worldBlueprint: blueprintState.blueprint };
     }
     ctx = refreshPersonaLoreRerank(ctx);
-    const candidateStageMaxTokens = Math.min(4096, config.maxCompletionTokens || 4096);
-    appendDebugLog("generation", "random_candidates_request_config", { configuredMaxCompletionTokens: config.maxCompletionTokens, stageMaxTokens: candidateStageMaxTokens, timeoutMs: config.timeout }, "debug");
-    const content = await callIndependentProvider(
-      "You create three distinct lore-grounded RisuAI persona candidates. Return valid JSON only.",
-      buildRandomCandidatePrompt({ ...ctx, randomConcept: preservedRandomConceptText, userRewriteGuidance: preservedUserRewriteGuidanceText }),
+
+    // Random candidate generation can spend a meaningful part of the completion budget
+    // on reasoning before it starts emitting the JSON. Do not silently halve the user's
+    // configured output budget here; use the provider setting as-is.
+    const candidateStageMaxTokens = clampInt(config.maxCompletionTokens || 8192, 64, 200000, 8192);
+    const candidateSystemPrompt = "You create three distinct lore-grounded RisuAI persona candidates. Return valid JSON only.";
+    const candidatePrompt = buildRandomCandidatePrompt({ ...ctx, randomConcept: preservedRandomConceptText, userRewriteGuidance: preservedUserRewriteGuidanceText });
+    const sharedPromptPrefix = buildProviderSharedReference(ctx, "persona");
+    appendDebugLog("generation", "random_candidates_request_config", {
+      configuredMaxCompletionTokens: config.maxCompletionTokens,
+      stageMaxTokens: candidateStageMaxTokens,
+      timeoutMs: config.timeout,
+      provider: config.provider,
+      model: config.model,
+    }, "debug");
+
+    let content = await callIndependentProvider(
+      candidateSystemPrompt,
+      candidatePrompt,
       config,
-      { jsonMode: true, jsonSchema: RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix: buildProviderSharedReference(ctx, "persona"), maxTokens: candidateStageMaxTokens },
+      { jsonMode: true, jsonSchema: RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix, maxTokens: candidateStageMaxTokens },
     );
     let candidates = normalizeRandomCandidateBundle(content, { logDiagnostics: true });
+    let chosenContent = content;
+    let chosenQuality = randomCandidateRecoveryQuality(content, candidates);
+    let retryContent = "";
     let repairContent = "";
+
     if (candidates.length !== 3) {
-      appendDebugLog("generation", "random_candidates_schema_repair_start", { primaryCandidateCount: candidates.length, contentChars: content.length }, "warn");
+      // A malformed/short response is not a schema-normalization problem. Regenerate from
+      // the original world-grounded prompt first, with reasoning disabled. Ollama Cloud
+      // also falls back to prompt-enforced JSON on this recovery attempt because its
+      // response_format path may return a tiny non-empty fragment that the generic
+      // empty-content retry cannot detect.
+      const recoveryConfig = normalizeLLMConfig({
+        ...config,
+        reasoningPreset: "off",
+        reasoningEffort: "none",
+        reasoningBudgetTokens: 0,
+        thinkingType: "disabled",
+        serviceTier: "off",
+      });
+      const ollamaCloud = normalizeProviderKey(recoveryConfig.provider) === "ollama_cloud";
+      appendDebugLog("generation", "random_candidates_regeneration_start", {
+        primaryValidCandidateCount: candidates.length,
+        primaryRawCandidateCount: chosenQuality.rawCandidateCount,
+        primaryChars: chosenQuality.chars,
+        primaryStrictJsonComplete: chosenQuality.strictJsonComplete,
+        reasoningDisabled: true,
+        jsonMode: !ollamaCloud,
+        maxTokens: candidateStageMaxTokens,
+      }, "warn");
       try {
-        repairContent = await repairRandomCandidateOutput(content, config);
-        candidates = normalizeRandomCandidateBundle(repairContent, { logDiagnostics: true });
-        appendDebugLog("generation", "random_candidates_schema_repair_complete", { repairedCandidateCount: candidates.length, repairChars: repairContent.length }, candidates.length === 3 ? "info" : "warn");
+        retryContent = await callIndependentProvider(
+          candidateSystemPrompt,
+          [
+            candidatePrompt,
+            "",
+            "## Recovery requirement",
+            "A previous generation attempt was structurally incomplete. Generate the three candidates again from the authoritative context above; do not copy or repair the failed output.",
+            "Emit all three complete candidate objects before stopping. Return JSON only.",
+          ].join("\n"),
+          recoveryConfig,
+          {
+            jsonMode: !ollamaCloud,
+            jsonSchema: ollamaCloud ? null : RANDOM_CANDIDATE_JSON_SCHEMA,
+            sharedPromptPrefix,
+            maxTokens: candidateStageMaxTokens,
+          },
+        );
+        const retryCandidates = normalizeRandomCandidateBundle(retryContent, { logDiagnostics: true });
+        const retryQuality = randomCandidateRecoveryQuality(retryContent, retryCandidates);
+        appendDebugLog("generation", "random_candidates_regeneration_complete", {
+          retryValidCandidateCount: retryCandidates.length,
+          retryRawCandidateCount: retryQuality.rawCandidateCount,
+          retryChars: retryQuality.chars,
+          retryStrictJsonComplete: retryQuality.strictJsonComplete,
+          selectedRetry: retryQuality.score > chosenQuality.score,
+        }, retryCandidates.length === 3 ? "info" : "warn");
+        if (retryQuality.score > chosenQuality.score) {
+          chosenContent = retryContent;
+          chosenQuality = retryQuality;
+          candidates = retryCandidates;
+        }
       } catch (error) {
-        appendDebugLog("generation", "random_candidates_schema_repair_failed", { primaryCandidateCount: candidates.length, error: errorForLog(error) }, "warn");
+        appendDebugLog("generation", "random_candidates_regeneration_failed", {
+          primaryValidCandidateCount: candidates.length,
+          error: errorForLog(error),
+        }, "warn");
       }
     }
+
     if (candidates.length !== 3) {
-      setGeneratedOutputText(structuredGenerationFailureText(content, repairContent));
+      // Schema repair is useful only after a real generation attempt has produced
+      // candidate material. It is intentionally second to full regeneration so a
+      // 33-character fragment cannot be converted into three empty placeholder shells.
+      appendDebugLog("generation", "random_candidates_schema_repair_start", {
+        bestValidCandidateCount: candidates.length,
+        bestRawCandidateCount: chosenQuality.rawCandidateCount,
+        contentChars: chosenQuality.chars,
+        strictJsonComplete: chosenQuality.strictJsonComplete,
+      }, "warn");
+      try {
+        repairContent = await repairRandomCandidateOutput(chosenContent, config);
+        const repairedCandidates = normalizeRandomCandidateBundle(repairContent, { logDiagnostics: true });
+        const repairQuality = randomCandidateRecoveryQuality(repairContent, repairedCandidates);
+        if (repairQuality.score > chosenQuality.score) {
+          chosenContent = repairContent;
+          chosenQuality = repairQuality;
+          candidates = repairedCandidates;
+        }
+        appendDebugLog("generation", "random_candidates_schema_repair_complete", {
+          repairedCandidateCount: repairedCandidates.length,
+          repairRawCandidateCount: repairQuality.rawCandidateCount,
+          repairChars: repairQuality.chars,
+          selectedRepair: chosenContent === repairContent,
+        }, candidates.length === 3 ? "info" : "warn");
+      } catch (error) {
+        appendDebugLog("generation", "random_candidates_schema_repair_failed", { bestCandidateCount: candidates.length, error: errorForLog(error) }, "warn");
+      }
+    }
+
+    if (candidates.length !== 3) {
+      setGeneratedOutputText([
+        "[PRIMARY STRUCTURED RESPONSE]",
+        String(content || ""),
+        ...(retryContent ? ["", "[FULL REGENERATION RESPONSE]", String(retryContent)] : []),
+        ...(repairContent ? ["", "[ONE-PASS SCHEMA REPAIR RESPONSE]", String(repairContent)] : []),
+      ].join("\n"));
       throw new Error(`랜덤 후보를 정확히 3개 추출하지 못했습니다. 인식된 후보: ${candidates.length}개`);
     }
     preservedRandomCandidates = candidates.map((item) => ({ ...item, id: `lia-candidate::${randomId()}` }));
@@ -7974,7 +8143,17 @@ ${revisionText}`);
           continue;
         }
         if (!content) throw new Error(`${providerDisplayLabel(config.provider)} returned no text content.`);
-        appendDebugLog("provider", "call_success", { requestId: providerCallId, provider: config.provider, model: config.model, elapsedMs: Date.now() - providerStartedAt, contentChars: content.length, contentPreview: limitText(content, 1800), retries: { transientRetry, cacheRetry, jsonRetry, reasoningRetry, emptyContentReasoningRetry, responsesRetry } }, "info");
+        appendDebugLog("provider", "call_success", {
+          requestId: providerCallId,
+          provider: config.provider,
+          model: config.model,
+          elapsedMs: Date.now() - providerStartedAt,
+          contentChars: content.length,
+          contentPreview: limitText(content, 1800),
+          finishReason: String(result?.finishReason || ""),
+          usage: result?.usage || {},
+          retries: { transientRetry, cacheRetry, jsonRetry, reasoningRetry, emptyContentReasoningRetry, responsesRetry },
+        }, "info");
         return content;
       } catch (error) {
         if (!cacheRetry && config.promptCacheMode !== "off" && isPromptCacheUnsupportedError(error)) {
@@ -8358,13 +8537,15 @@ ${revisionText}`);
   async function repairRandomCandidateOutput(rawContent, config) {
     const repairConfig = normalizeLLMConfig({ ...config, temp: 0, reasoningPreset: "off", reasoningEffort: "none", reasoningBudgetTokens: 0, thinkingType: "disabled", serviceTier: "off" });
     const ollamaCloud = normalizeProviderKey(repairConfig.provider) === "ollama_cloud";
+    const repairMaxTokens = clampInt(repairConfig.maxCompletionTokens || 8192, 64, 200000, 8192);
     return await callIndependentProvider(
       "You normalize an existing random-persona candidate response. Return one JSON object only.",
       [
         "Convert the supplied response into the exact canonical candidate shape below.",
-        "Preserve the three existing candidate concepts. Do not invent a fourth candidate, replace an identity, or add unsupported world facts.",
+        "Preserve the existing candidate concepts. This is schema repair, not a new generation pass.",
         "Map equivalent keys when obvious: personality/personality_engine/core_personality/temperament -> personalityCore; daily_life/daily_routine/hook -> conceptHook; relationship_route/relationship_path/relationship_dynamic -> relationshipSeed; cost_vulnerability/vulnerability/weakness_cost/weakness/risk/drawback -> noveltyReason; species/race -> speciesRace.",
-        "If a canonical field is absent, use an empty string instead of inventing content.",
+        "Recover canonical fields from information already present inside each same candidate. Do not fabricate unsupported world facts or silently replace an identity.",
+        "If the supplied response contains fewer than three actual candidate concepts, do not create empty placeholder candidates merely to satisfy the shape.",
         "The top-level value must be one object, never a bare array.",
         canonicalRandomCandidateJsonTemplate(),
         "Return JSON only with no Markdown fences or commentary.",
@@ -8373,7 +8554,7 @@ ${revisionText}`);
         limitText(String(rawContent || ""), 18000),
       ].join("\n"),
       repairConfig,
-      { jsonMode: !ollamaCloud, jsonSchema: ollamaCloud ? null : RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix: "", maxTokens: Math.min(4096, Number(repairConfig.maxCompletionTokens || 4096) || 4096) },
+      { jsonMode: !ollamaCloud, jsonSchema: ollamaCloud ? null : RANDOM_CANDIDATE_JSON_SCHEMA, sharedPromptPrefix: "", maxTokens: repairMaxTokens },
     );
   }
 
@@ -9128,14 +9309,14 @@ ${revisionText}`);
             ? "Source evidence: current chat user-authored messages only"
             : `Source persona: ${persona.name || "{{user}}"}`,
       `Target character: ${char.name || "{{char}}"}`,
-      `Target chat: ${chat.name || `#${Number(ctx.chatIndex || 0) + 1}`}`,
+      `Target chat: ${chat.name || `#${Number(ctx?.chatIndex || 0) + 1}`}`,
     ].filter(Boolean).join("\n");
   }
 
-  function fallbackPersonaIdStem(ctx, result = null) {
-    const source = ctx.personaInfo.persona || {};
-    const char = ctx.char || {};
-    const chat = ctx.chat || {};
+  function fallbackPersonaIdStem(ctx = {}, result = null) {
+    const source = ctx?.personaInfo?.persona || {};
+    const char = ctx?.char || {};
+    const chat = ctx?.chat || {};
     const idTarget = String(char.chaId || char.id || char.name || "character");
     const idChat = String(chat.id || chat.chatId || chat.name || ctx.chatIndex || "chat");
     const lineage = normalizePersonaLineage(result?.personaLineage || result?.persona_lineage || null);
@@ -9149,9 +9330,9 @@ ${revisionText}`);
     return `${GENERATED_PERSONA_ID_PREFIX}::${idTarget}::${idChat}::${idSource}::`;
   }
 
-  function legacyFallbackPersonaIdStem(ctx) {
-    const source = ctx.personaInfo.persona || {};
-    const char = ctx.char || {};
+  function legacyFallbackPersonaIdStem(ctx = {}) {
+    const source = ctx?.personaInfo?.persona || {};
+    const char = ctx?.char || {};
     const idTarget = String(char.chaId || char.id || char.name || "character");
     const idSource = String(source.id || source.name || "persona");
     return `${LEGACY_GENERATED_PERSONA_ID_PREFIX}::${idTarget}::${idSource}::`;
@@ -10331,6 +10512,7 @@ ${revisionText}`);
       responsePath: String(config.responsePath || "data.0.image").trim(),
       requestTemplateJson: String(config.requestTemplateJson || config.requestTemplate || "").trim(),
       workflowJson: normalizedWorkflowJson,
+      workflowBindingJson: String(config.workflowBindingJson || config.bindingProfileJson || "").trim(),
       headersJson: String(config.headersJson || "").trim(),
       stylePrompt: String(config.stylePrompt || "clean polished anime character portrait, high quality, single character, standalone visual novel portrait asset").trim(),
       negativePrompt: String(config.negativePrompt || "low quality, blurry, bad anatomy, extra fingers, multiple people, cropped face, deformed hands, duplicate limbs, text, watermark, logo").trim(),
@@ -10366,6 +10548,7 @@ ${revisionText}`);
       responsePath: String(document.getElementById("dpg-img-response-path")?.value || "").trim(),
       requestTemplateJson: String(document.getElementById("dpg-img-request-template")?.value || "").trim(),
       workflowJson: String(document.getElementById("dpg-img-workflow")?.value || "").trim(),
+      workflowBindingJson: String(document.getElementById("dpg-img-binding-profile")?.value || "").trim(),
       headersJson: String(document.getElementById("dpg-img-headers")?.value || "").trim(),
       stylePrompt: String(document.getElementById("dpg-img-style")?.value || "").trim(),
       negativePrompt: String(document.getElementById("dpg-img-negative")?.value || "").trim(),
@@ -10395,6 +10578,124 @@ ${revisionText}`);
     if (!storage?.setItem) throw new Error("RisuAI pluginStorage가 아직 준비되지 않았습니다.");
     await storage.setItem(ILLUSTRATION_CONFIG_STORAGE_KEY, JSON.stringify(normalized));
     return normalized;
+  }
+
+  function normalizeVisualAssetPreset(value = {}) {
+    const rawEmotionText = String(value.emotionText || value.emotions || "").trim();
+    const emotionItems = unique(rawEmotionText.split(/\r?\n|,/).map((item) => String(item || "").trim()).filter(Boolean), 48);
+    if (!emotionItems.some((item) => normalizeEmotionKey(item) === "neutral")) emotionItems.unshift("neutral");
+    const name = String(value.name || "").normalize("NFKC").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 64);
+    return {
+      id: String(value.id || "").trim() || `vap-${randomId()}`,
+      name,
+      emotionText: unique(emotionItems, 48).join("\n"),
+      styleNotes: String(value.styleNotes || "").trim().slice(0, 4000),
+      compositionPreset: normalizeVisualCompositionPreset(value.compositionPreset || "standard_waist_up"),
+      compositionNotes: String(value.compositionNotes || "").trim().slice(0, 4000),
+      createdAt: String(value.createdAt || new Date().toISOString()),
+      updatedAt: String(value.updatedAt || new Date().toISOString()),
+    };
+  }
+
+  function normalizeVisualAssetPresetStore(raw = {}) {
+    const source = Array.isArray(raw?.items) ? raw.items : [];
+    const items = [];
+    const seenIds = new Set();
+    const seenNames = new Set();
+    for (const value of source) {
+      const preset = normalizeVisualAssetPreset(value);
+      if (!preset.name || seenIds.has(preset.id)) continue;
+      const nameKey = preset.name.toLocaleLowerCase("ko");
+      if (seenNames.has(nameKey)) continue;
+      seenIds.add(preset.id);
+      seenNames.add(nameKey);
+      items.push(preset);
+      if (items.length >= PERSONA_VISUAL_ASSET_PRESET_MAX) break;
+    }
+    return {
+      version: PERSONA_VISUAL_ASSET_PRESET_VERSION,
+      updatedAt: String(raw?.updatedAt || new Date().toISOString()),
+      items,
+    };
+  }
+
+  async function readVisualAssetPresetStore() {
+    try {
+      const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+      const raw = storage?.getItem ? await storage.getItem(PERSONA_VISUAL_ASSET_PRESET_STORAGE_KEY) : null;
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : (raw || {});
+      return normalizeVisualAssetPresetStore(parsed);
+    } catch (error) {
+      appendDebugLog("persona_visual", "asset_preset_store_read_failed", { error: errorForLog(error) }, "warn");
+      return normalizeVisualAssetPresetStore();
+    }
+  }
+
+  async function writeVisualAssetPresetStore(store) {
+    const normalized = normalizeVisualAssetPresetStore({ ...store, updatedAt: new Date().toISOString() });
+    const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
+    if (!storage?.setItem) throw new Error("RisuAI pluginStorage가 아직 준비되지 않았습니다.");
+    await storage.setItem(PERSONA_VISUAL_ASSET_PRESET_STORAGE_KEY, JSON.stringify(normalized));
+    preservedVisualAssetPresetStore = normalized;
+    return normalized;
+  }
+
+  function currentVisualAssetPresetInput() {
+    const emotionsRaw = String(document.getElementById("dpg-asset-emotions")?.value || preservedVisualEmotionText || "").trim();
+    const emotions = unique(emotionsRaw.split(/\r?\n|,/).map((item) => String(item || "").trim()).filter(Boolean), 48);
+    if (!emotions.some((item) => normalizeEmotionKey(item) === "neutral")) emotions.unshift("neutral");
+    return {
+      emotionText: unique(emotions, 48).join("\n"),
+      styleNotes: String(document.getElementById("dpg-asset-style-notes")?.value || preservedVisualStyleNotes || "").trim(),
+      compositionPreset: normalizeVisualCompositionPreset(document.getElementById("dpg-asset-composition-preset")?.value || preservedVisualCompositionPreset || "standard_waist_up"),
+      compositionNotes: String(document.getElementById("dpg-asset-composition-notes")?.value || preservedVisualCompositionNotes || "").trim(),
+    };
+  }
+
+  async function saveVisualAssetPreset(name) {
+    const normalizedName = String(name || "").normalize("NFKC").replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 64);
+    if (!normalizedName) throw new Error("프리셋 이름을 입력해 주세요.");
+    const store = normalizeVisualAssetPresetStore(preservedVisualAssetPresetStore || await readVisualAssetPresetStore());
+    const input = currentVisualAssetPresetInput();
+    const existingIndex = store.items.findIndex((item) => String(item?.name || "").trim().toLocaleLowerCase("ko") === normalizedName.toLocaleLowerCase("ko"));
+    let preset;
+    if (existingIndex >= 0) {
+      const old = store.items[existingIndex];
+      preset = normalizeVisualAssetPreset({ ...old, ...input, name: normalizedName, id: old.id, createdAt: old.createdAt, updatedAt: new Date().toISOString() });
+      store.items[existingIndex] = preset;
+    } else {
+      if (store.items.length >= PERSONA_VISUAL_ASSET_PRESET_MAX) throw new Error(`감정 에셋 프리셋은 최대 ${PERSONA_VISUAL_ASSET_PRESET_MAX}개까지 저장할 수 있습니다.`);
+      preset = normalizeVisualAssetPreset({ ...input, name: normalizedName, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      store.items.unshift(preset);
+    }
+    await writeVisualAssetPresetStore(store);
+    preservedVisualAssetPresetId = preset.id;
+    appendDebugLog("persona_visual", "asset_preset_saved", { presetId: preset.id, name: preset.name, emotionCount: preset.emotionText.split(/\r?\n/).filter(Boolean).length, compositionPreset: preset.compositionPreset }, "info");
+    return { preset, updated: existingIndex >= 0 };
+  }
+
+  function applyVisualAssetPreset(preset) {
+    const normalized = normalizeVisualAssetPreset(preset || {});
+    if (!normalized.name) throw new Error("불러올 프리셋을 찾지 못했습니다.");
+    preservedVisualEmotionText = normalized.emotionText;
+    preservedVisualStyleNotes = normalized.styleNotes;
+    preservedVisualCompositionPreset = normalized.compositionPreset;
+    preservedVisualCompositionNotes = normalized.compositionNotes;
+    preservedVisualAssetPresetId = normalized.id;
+    return normalized;
+  }
+
+  async function deleteVisualAssetPreset(presetId) {
+    const id = String(presetId || "").trim();
+    if (!id) throw new Error("삭제할 프리셋을 선택해 주세요.");
+    const store = normalizeVisualAssetPresetStore(preservedVisualAssetPresetStore || await readVisualAssetPresetStore());
+    const preset = store.items.find((item) => item.id === id);
+    if (!preset) throw new Error("삭제할 프리셋을 찾지 못했습니다.");
+    store.items = store.items.filter((item) => item.id !== id);
+    await writeVisualAssetPresetStore(store);
+    if (preservedVisualAssetPresetId === id) preservedVisualAssetPresetId = "";
+    appendDebugLog("persona_visual", "asset_preset_deleted", { presetId: id, name: preset.name }, "info");
+    return preset;
   }
 
   const VISUAL_WHITE_BACKGROUND_POSITIVE = "pure white background, plain white background, seamless white studio backdrop, isolated character on white";
@@ -10497,6 +10798,12 @@ ${revisionText}`);
       compositionNotes: String(lock.compositionNotes || "").trim(),
       advancedJson: String(lock.advancedJson || "").trim(),
       workflowHash: String(lock.workflowHash || "").trim(),
+      workflowTopologyHash: String(lock.workflowTopologyHash || "").trim(),
+      workflowExecutionHash: String(lock.workflowExecutionHash || "").trim(),
+      bindingProfileHash: String(lock.bindingProfileHash || "").trim(),
+      comfyOutputNodeId: String(lock.comfyOutputNodeId || "").trim(),
+      comfyControlledSlots: Array.isArray(lock.comfyControlledSlots) ? lock.comfyControlledSlots.map((item) => String(item || "").trim()).filter(Boolean) : [],
+      comfyEffectiveValues: lock.comfyEffectiveValues && typeof lock.comfyEffectiveValues === "object" ? { ...lock.comfyEffectiveValues } : {},
       requestTemplateHash: String(lock.requestTemplateHash || "").trim(),
       createdAt: String(lock.createdAt || new Date().toISOString()),
       lockedAt: confirmed ? String(lock.lockedAt || new Date().toISOString()) : "",
@@ -10523,6 +10830,12 @@ ${revisionText}`);
       compositionNotes: normalized.compositionNotes,
       advancedJson: normalized.advancedJson,
       workflowHash: normalized.workflowHash,
+      workflowTopologyHash: normalized.workflowTopologyHash,
+      workflowExecutionHash: normalized.workflowExecutionHash,
+      bindingProfileHash: normalized.bindingProfileHash,
+      comfyOutputNodeId: normalized.comfyOutputNodeId,
+      comfyControlledSlots: normalized.comfyControlledSlots,
+      comfyEffectiveValues: normalized.comfyEffectiveValues,
       requestTemplateHash: normalized.requestTemplateHash,
     }))).trim();
     return normalized;
@@ -10642,6 +10955,8 @@ ${revisionText}`);
       compositionNotes: compositionChoice.notes,
       advancedJson: config.advancedJson,
       workflowHash: hashText(String(config.workflowJson || "")),
+      workflowTopologyHash: config.provider === "comfyui-local" ? (() => { try { const resolved = resolveComfyWorkflowSource(config); return looksLikeComfyWorkflowGraph(resolved.workflow) ? comfyWorkflowTopologyHash(resolved.workflow) : ""; } catch (_) { return ""; } })() : "",
+      bindingProfileHash: config.provider === "comfyui-local" ? (() => { try { const resolved = resolveComfyWorkflowSource(config); return looksLikeComfyWorkflowGraph(resolved.workflow) ? resolveComfyBindingProfile(config, resolved.workflow).profile.profileHash : ""; } catch (_) { return ""; } })() : "",
       requestTemplateHash: hashText(String(config.requestTemplateJson || "")),
       createdAt: new Date().toISOString(),
     }, { confirmed: false });
@@ -10654,8 +10969,17 @@ ${revisionText}`);
     if (normalizeIllustrationProviderType(current.provider) !== normalizedLock.provider) {
       throw new Error(`Neutral 기준 Provider(${normalizedLock.provider})와 현재 Provider(${current.provider})가 다릅니다. 기준을 다시 만들거나 Provider를 되돌려 주세요.`);
     }
-    if (normalizedLock.provider === "comfyui-local" && normalizedLock.workflowHash !== hashText(String(current.workflowJson || ""))) {
-      throw new Error("Neutral 기준 확정 후 ComfyUI workflow가 변경되었습니다. 동일성 유지를 위해 Neutral 기준을 다시 만들어 주세요.");
+    if (normalizedLock.provider === "comfyui-local") {
+      const resolved = resolveComfyWorkflowSource(current);
+      if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("현재 ComfyUI workflow를 읽지 못했습니다.");
+      const topologyHash = comfyWorkflowTopologyHash(resolved.workflow);
+      const bindingProfileHash = resolveComfyBindingProfile(current, resolved.workflow).profile.profileHash;
+      if (normalizedLock.workflowTopologyHash ? normalizedLock.workflowTopologyHash !== topologyHash : normalizedLock.workflowHash !== hashText(String(current.workflowJson || ""))) {
+        throw new Error("Neutral 기준 확정 후 ComfyUI Workflow 구조가 변경되었습니다. 동일성 유지를 위해 Neutral 기준을 다시 만들어 주세요.");
+      }
+      if (normalizedLock.bindingProfileHash && normalizedLock.bindingProfileHash !== bindingProfileHash) {
+        throw new Error("Neutral 기준 확정 후 ComfyUI Binding Profile이 변경되었습니다. Neutral 기준을 다시 만들어 주세요.");
+      }
     }
     if (normalizedLock.provider === "custom-json" && normalizedLock.requestTemplateHash !== hashText(String(current.requestTemplateJson || ""))) {
       throw new Error("Neutral 기준 확정 후 Custom JSON template이 변경되었습니다. Neutral 기준을 다시 만들어 주세요.");
@@ -11121,6 +11445,26 @@ ${revisionText}`);
     return items.length ? items : ["neutral"];
   }
 
+  function normalizeCustomVisualEmotionLabel(value) {
+    return String(value || "")
+      .normalize("NFKC")
+      .replace(/[\r\n\t]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 64);
+  }
+
+  function rememberCustomVisualEmotionLabel(value) {
+    const label = normalizeCustomVisualEmotionLabel(value);
+    if (!label) return "";
+    const current = String(preservedVisualEmotionText || "")
+      .split(/\r?\n|,/)
+      .map((item) => normalizeCustomVisualEmotionLabel(item))
+      .filter(Boolean);
+    preservedVisualEmotionText = unique([...current, label], 48).join("\n");
+    return label;
+  }
+
   function visualCompositionFramingGuard(preset) {
     const key = normalizeVisualCompositionPreset(preset || "standard_waist_up");
     if (key === "standard_waist_up") return "STRICT FRAMING: waist-up medium portrait, head and torso fill most of the frame, natural crop exactly at the waist, subject shown large and centered";
@@ -11394,6 +11738,153 @@ ${revisionText}`);
     throw new Error("ZIP response did not contain a supported image file");
   }
 
+  const ZIP_CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i += 1) {
+      let c = i;
+      for (let j = 0; j < 8; j += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      table[i] = c >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32Bytes(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    let crc = 0xffffffff;
+    for (let i = 0; i < data.length; i += 1) crc = ZIP_CRC32_TABLE[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function writeZipUint16(view, offset, value) {
+    view.setUint16(offset, Number(value || 0) & 0xffff, true);
+  }
+
+  function writeZipUint32(view, offset, value) {
+    view.setUint32(offset, Number(value || 0) >>> 0, true);
+  }
+
+  function concatUint8Arrays(parts) {
+    const list = Array.isArray(parts) ? parts : [];
+    const total = list.reduce((sum, part) => sum + (part?.length || 0), 0);
+    const out = new Uint8Array(total);
+    let offset = 0;
+    for (const part of list) {
+      const bytes = part instanceof Uint8Array ? part : new Uint8Array(part || []);
+      out.set(bytes, offset);
+      offset += bytes.length;
+    }
+    return out;
+  }
+
+  function createStoredZip(entries = []) {
+    const encoder = new TextEncoder();
+    const locals = [];
+    const centrals = [];
+    let localOffset = 0;
+    const normalizedEntries = (Array.isArray(entries) ? entries : []).map((entry) => ({
+      name: String(entry?.name || '').replace(/^\/+/, '').trim(),
+      bytes: entry?.bytes instanceof Uint8Array ? entry.bytes : new Uint8Array(entry?.bytes || []),
+    })).filter((entry) => entry.name && entry.bytes.length >= 0);
+    for (const entry of normalizedEntries) {
+      const nameBytes = encoder.encode(entry.name);
+      const data = entry.bytes instanceof Uint8Array ? entry.bytes : new Uint8Array(entry.bytes || []);
+      const crc = crc32Bytes(data);
+      const local = new Uint8Array(30 + nameBytes.length + data.length);
+      const lv = new DataView(local.buffer);
+      writeZipUint32(lv, 0, 0x04034b50);
+      writeZipUint16(lv, 4, 20);
+      writeZipUint16(lv, 6, 0);
+      writeZipUint16(lv, 8, 0);
+      writeZipUint16(lv, 10, 0);
+      writeZipUint16(lv, 12, 0);
+      writeZipUint32(lv, 14, crc);
+      writeZipUint32(lv, 18, data.length);
+      writeZipUint32(lv, 22, data.length);
+      writeZipUint16(lv, 26, nameBytes.length);
+      writeZipUint16(lv, 28, 0);
+      local.set(nameBytes, 30);
+      local.set(data, 30 + nameBytes.length);
+      locals.push(local);
+
+      const central = new Uint8Array(46 + nameBytes.length);
+      const cv = new DataView(central.buffer);
+      writeZipUint32(cv, 0, 0x02014b50);
+      writeZipUint16(cv, 4, 20);
+      writeZipUint16(cv, 6, 20);
+      writeZipUint16(cv, 8, 0);
+      writeZipUint16(cv, 10, 0);
+      writeZipUint16(cv, 12, 0);
+      writeZipUint16(cv, 14, 0);
+      writeZipUint32(cv, 16, crc);
+      writeZipUint32(cv, 20, data.length);
+      writeZipUint32(cv, 24, data.length);
+      writeZipUint16(cv, 28, nameBytes.length);
+      writeZipUint16(cv, 30, 0);
+      writeZipUint16(cv, 32, 0);
+      writeZipUint16(cv, 34, 0);
+      writeZipUint16(cv, 36, 0);
+      writeZipUint32(cv, 38, 0);
+      writeZipUint32(cv, 42, localOffset);
+      central.set(nameBytes, 46);
+      centrals.push(central);
+      localOffset += local.length;
+    }
+    const centralStart = localOffset;
+    const centralBytes = concatUint8Arrays(centrals);
+    const centralSize = centralBytes.length;
+    const eocd = new Uint8Array(22);
+    const ev = new DataView(eocd.buffer);
+    writeZipUint32(ev, 0, 0x06054b50);
+    writeZipUint16(ev, 4, 0);
+    writeZipUint16(ev, 6, 0);
+    writeZipUint16(ev, 8, normalizedEntries.length);
+    writeZipUint16(ev, 10, normalizedEntries.length);
+    writeZipUint32(ev, 12, centralSize);
+    writeZipUint32(ev, 16, centralStart);
+    writeZipUint16(ev, 20, 0);
+    return concatUint8Arrays([...locals, centralBytes, eocd]);
+  }
+
+  async function unpackZipEntries(bytes) {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    let eocd = -1;
+    const min = Math.max(0, data.length - 65557);
+    for (let offset = data.length - 22; offset >= min; offset -= 1) {
+      if (readZipUint32(data, offset) === 0x06054b50) { eocd = offset; break; }
+    }
+    if (eocd < 0) throw new Error('ZIP 중앙 디렉터리를 찾지 못했습니다.');
+    const entryCount = readZipUint16(data, eocd + 10);
+    let offset = readZipUint32(data, eocd + 16);
+    const decoder = new TextDecoder('utf-8');
+    const entries = [];
+    for (let index = 0; index < entryCount && offset + 46 <= data.length; index += 1) {
+      if (readZipUint32(data, offset) !== 0x02014b50) break;
+      const method = readZipUint16(data, offset + 10);
+      const compressedSize = readZipUint32(data, offset + 20);
+      const uncompressedSize = readZipUint32(data, offset + 24);
+      const fileNameLength = readZipUint16(data, offset + 28);
+      const extraLength = readZipUint16(data, offset + 30);
+      const commentLength = readZipUint16(data, offset + 32);
+      const localOffset = readZipUint32(data, offset + 42);
+      const fileName = decoder.decode(data.slice(offset + 46, offset + 46 + fileNameLength));
+      offset += 46 + fileNameLength + extraLength + commentLength;
+      if (readZipUint32(data, localOffset) !== 0x04034b50) continue;
+      const localNameLength = readZipUint16(data, localOffset + 26);
+      const localExtraLength = readZipUint16(data, localOffset + 28);
+      const start = localOffset + 30 + localNameLength + localExtraLength;
+      const compressed = data.slice(start, start + compressedSize);
+      let content = null;
+      if (method === 0) content = compressed;
+      else if (method === 8) content = await inflateZipEntry(compressed);
+      else throw new Error(`ZIP 엔트리 '${fileName}'는 지원하지 않는 압축 방식(${method})을 사용합니다.`);
+      if (uncompressedSize && content.length !== uncompressedSize) {
+        appendDebugLog('persona_visual', 'asset_bundle_zip_size_mismatch', { fileName, expected: uncompressedSize, actual: content.length }, 'warn');
+      }
+      entries.push({ name: fileName, bytes: content, method, compressedSize, uncompressedSize: uncompressedSize || content.length });
+    }
+    return entries;
+  }
+
   function getByPath(value, path) {
     const parts = String(path || "").split(".").map((part) => part.trim()).filter(Boolean);
     let current = value;
@@ -11489,166 +11980,484 @@ ${revisionText}`);
     return false;
   }
 
-  function findSoyaPromptParserBinding(workflow) {
-    const graph = comfyPromptGraph(workflow);
-    if (!graph || typeof graph !== "object") return null;
-    for (const [parserId, node] of Object.entries(graph)) {
-      if (String(node?.class_type || "") !== "SoyaPromptParser_mdsoya") continue;
-      const ref = node?.inputs?.text;
-      const sourceNodeId = Array.isArray(ref) && ref.length ? String(ref[0]) : "";
-      const sourceNode = sourceNodeId ? graph[sourceNodeId] : null;
-      const sourceText = String(sourceNode?.inputs?.value ?? "");
-      if (!sourceNodeId || !sourceText) continue;
-      return { graph, parserId: String(parserId), parserNode: node, sourceNodeId, sourceNode, sourceText };
+  function comfyIsNodeRef(value) {
+    return Array.isArray(value) && value.length >= 2 && String(value[0] ?? "").trim() && Number.isFinite(Number(value[1]));
+  }
+
+  function comfyGetNodeRef(value) {
+    return comfyIsNodeRef(value) ? { nodeId: String(value[0]), outputIndex: Number(value[1]) } : null;
+  }
+
+  function comfyStableValue(value) {
+    if (Array.isArray(value)) return value.map((item) => comfyStableValue(item));
+    if (!value || typeof value !== "object") return value;
+    const out = {};
+    Object.keys(value).sort().forEach((key) => { out[key] = comfyStableValue(value[key]); });
+    return out;
+  }
+
+  function comfyWorkflowTopologyObject(workflow) {
+    const graph = comfyPromptGraph(workflow) || {};
+    const nodes = {};
+    Object.keys(graph).sort().forEach((nodeId) => {
+      const node = graph[nodeId] || {};
+      const inputs = {};
+      Object.keys(node.inputs || {}).sort().forEach((key) => {
+        const value = node.inputs[key];
+        if (comfyIsNodeRef(value)) inputs[key] = [String(value[0]), Number(value[1])];
+        else if (Array.isArray(value)) inputs[key] = value.map((item) => comfyIsNodeRef(item) ? [String(item[0]), Number(item[1])] : typeof item);
+        else inputs[key] = typeof value;
+      });
+      nodes[nodeId] = { classType: String(node.class_type || ""), inputKeys: Object.keys(inputs), inputs };
+    });
+    return nodes;
+  }
+
+  function comfyWorkflowTopologyHash(workflow) {
+    return hashText(JSON.stringify(comfyStableValue(comfyWorkflowTopologyObject(workflow))));
+  }
+
+  function comfyBuildConsumers(graph) {
+    const consumers = new Map();
+    for (const [consumerId, node] of Object.entries(graph || {})) {
+      const walk = (value, path = "inputs") => {
+        if (comfyIsNodeRef(value)) {
+          const sourceId = String(value[0]);
+          if (!consumers.has(sourceId)) consumers.set(sourceId, []);
+          consumers.get(sourceId).push({ consumerId: String(consumerId), path, outputIndex: Number(value[1]) });
+          return;
+        }
+        if (Array.isArray(value)) value.forEach((item, index) => walk(item, `${path}.${index}`));
+        else if (value && typeof value === "object") Object.entries(value).forEach(([key, item]) => walk(item, `${path}.${key}`));
+      };
+      Object.entries(node?.inputs || {}).forEach(([key, value]) => walk(value, `inputs.${key}`));
+    }
+    return consumers;
+  }
+
+  function comfyCollectUpstream(graph, startRef, maxDepth = 18) {
+    const start = comfyGetNodeRef(startRef);
+    if (!start) return [];
+    const out = [];
+    const queue = [{ nodeId: start.nodeId, depth: 0 }];
+    const seen = new Set();
+    while (queue.length) {
+      const current = queue.shift();
+      if (!current || current.depth > maxDepth || seen.has(current.nodeId)) continue;
+      seen.add(current.nodeId);
+      const node = graph?.[current.nodeId];
+      if (!node) continue;
+      out.push({ nodeId: current.nodeId, node, depth: current.depth });
+      const visit = (value) => {
+        const ref = comfyGetNodeRef(value);
+        if (ref) queue.push({ nodeId: ref.nodeId, depth: current.depth + 1 });
+        else if (Array.isArray(value)) value.forEach(visit);
+        else if (value && typeof value === "object") Object.values(value).forEach(visit);
+      };
+      Object.values(node.inputs || {}).forEach(visit);
+    }
+    return out;
+  }
+
+  function comfySamplerScore(node) {
+    const inputs = node?.inputs || {};
+    let score = 0;
+    if (Object.prototype.hasOwnProperty.call(inputs, "positive")) score += 10;
+    if (Object.prototype.hasOwnProperty.call(inputs, "negative")) score += 10;
+    if (Object.prototype.hasOwnProperty.call(inputs, "model")) score += 4;
+    if (Object.prototype.hasOwnProperty.call(inputs, "latent_image") || Object.prototype.hasOwnProperty.call(inputs, "latent")) score += 4;
+    if (Object.prototype.hasOwnProperty.call(inputs, "seed") || Object.prototype.hasOwnProperty.call(inputs, "noise_seed")) score += 4;
+    if (Object.prototype.hasOwnProperty.call(inputs, "steps")) score += 2;
+    if (Object.prototype.hasOwnProperty.call(inputs, "cfg")) score += 2;
+    if (Object.prototype.hasOwnProperty.call(inputs, "sampler_name")) score += 2;
+    return score;
+  }
+
+  function comfyOutputScore(node, nodeId, consumers, graph) {
+    const inputs = node?.inputs || {};
+    let score = 0;
+    if (Object.prototype.hasOwnProperty.call(inputs, "images") || Object.prototype.hasOwnProperty.call(inputs, "image")) score += 8;
+    if (!consumers.has(String(nodeId)) || !(consumers.get(String(nodeId)) || []).length) score += 6;
+    if (/save|preview|output/i.test(String(node?.class_type || ""))) score += 4;
+    const imageRef = comfyGetNodeRef(inputs.images) || comfyGetNodeRef(inputs.image);
+    if (imageRef) {
+      const upstream = comfyCollectUpstream(graph, [imageRef.nodeId, imageRef.outputIndex]);
+      const bestSampler = upstream.reduce((best, item) => Math.max(best, comfySamplerScore(item.node)), 0);
+      score += Math.min(12, bestSampler / 2);
+    }
+    return score;
+  }
+
+  function comfyFindOutputCandidate(graph) {
+    const consumers = comfyBuildConsumers(graph);
+    const candidates = Object.entries(graph || {}).map(([nodeId, node]) => ({ nodeId: String(nodeId), node, score: comfyOutputScore(node, nodeId, consumers, graph) }))
+      .filter((item) => item.score >= 8)
+      .sort((a, b) => b.score - a.score || Number(b.nodeId) - Number(a.nodeId));
+    return candidates[0] || null;
+  }
+
+  function comfyFindSamplerForOutput(graph, output) {
+    if (!output?.node) return null;
+    const startRef = comfyGetNodeRef(output.node?.inputs?.images) || comfyGetNodeRef(output.node?.inputs?.image);
+    const roots = startRef ? comfyCollectUpstream(graph, [startRef.nodeId, startRef.outputIndex]) : [];
+    return roots.map((item) => ({ ...item, score: comfySamplerScore(item.node) - item.depth * 0.15 }))
+      .filter((item) => item.score >= 18)
+      .sort((a, b) => b.score - a.score)[0] || null;
+  }
+
+  function comfyStringCandidateScore(item, role = "positive") {
+    const value = String(item?.value || "");
+    if (!value.trim()) return -999;
+    let score = Math.min(12, value.length / 120);
+    if (/^(?:text|value|string|prompt)$/i.test(String(item?.key || ""))) score += 8;
+    if (item.depth <= 2) score += 2;
+    if (/^\s*\[[^\]\r\n]{1,64}\]/m.test(value)) score += 3;
+    const title = String(item?.node?._meta?.title || "");
+    if (role === "negative" && /negative|부정|neg\b/i.test(title)) score += 4;
+    if (role === "positive" && /positive|긍정|prompt/i.test(title) && !/negative|부정/i.test(title)) score += 2;
+    if (/^(?:true|false|-?\d+(?:\.\d+)?)$/i.test(value.trim())) score -= 20;
+    return score;
+  }
+
+  function comfyFindTextSource(graph, startRef, role) {
+    const upstream = comfyCollectUpstream(graph, startRef, 22);
+    const candidates = [];
+    for (const item of upstream) {
+      for (const [key, value] of Object.entries(item.node?.inputs || {})) {
+        if (typeof value !== "string") continue;
+        const candidate = { ...item, key, path: `inputs.${key}`, value };
+        candidate.score = comfyStringCandidateScore(candidate, role);
+        if (candidate.score > 0) candidates.push(candidate);
+      }
+    }
+    return candidates.sort((a, b) => b.score - a.score || b.value.length - a.value.length)[0] || null;
+  }
+
+  function comfyParseStructuredSections(text) {
+    const source = String(text || "");
+    const markerRegex = /^\[([^\]\r\n]{1,64})\]\s*$/gm;
+    const matches = [];
+    let match = null;
+    while ((match = markerRegex.exec(source))) matches.push({ marker: String(match[1] || "").trim(), start: match.index, after: markerRegex.lastIndex });
+    if (!matches.length) return { source, preamble: source, sections: [] };
+    const sections = matches.map((item, index) => {
+      const end = index + 1 < matches.length ? matches[index + 1].start : source.length;
+      return { ...item, end, content: source.slice(item.after, end).replace(/^\r?\n/, "").replace(/\s+$/, "") };
+    });
+    return { source, preamble: source.slice(0, matches[0].start).replace(/\s+$/, ""), sections };
+  }
+
+  function comfyStructuredSectionPromptScore(section) {
+    const value = String(section?.content || "").trim();
+    const marker = String(section?.marker || "").trim();
+    if (!value) return -4;
+    let score = 0;
+    if (value.length >= 120) score += 4;
+    if (value.length >= 300) score += 4;
+    const commaCount = (value.match(/,/g) || []).length;
+    if (commaCount >= 6) score += 2;
+    if (/[.!?]\s|\b(?:portrait|character|background|expression|hair|eyes|quality)\b/i.test(value)) score += 1;
+    if (/^[\[{].*[\]}]$/s.test(value)) score -= 6;
+    if (/^(?:true|false|-?\d+(?:\.\d+)?)$/i.test(value)) score -= 8;
+    if (/\\|\.safetensors\b|\.pt\b|\.ckpt\b|\.bin\b/i.test(value)) score -= 6;
+    if (/(?:ENABLE|ENABLED|ACTIVATE|SEED|WIDTH|HEIGHT|SIZE|PATH|DIR|CACHE|COUNT|MODEL|LORA|ADAPTER|FACE|IDENTITY|REFERENCE|CHAR(?:ACTER)?)/i.test(marker)) score -= 3;
+    return score;
+  }
+
+  function comfyStructuredGroupKey(marker) {
+    const raw = String(marker || "").trim();
+    return (raw.split(/[_:\-]/)[0] || raw).toUpperCase();
+  }
+
+  function comfyReplaceStructuredSection(parsed, marker, value) {
+    const source = String(parsed?.source || "");
+    const wanted = String(marker || "");
+    const section = (parsed?.sections || []).find((item) => item.marker === wanted);
+    if (!section) return source;
+    const replacement = String(value ?? "").trim();
+    const tail = source.slice(section.end);
+    const separator = tail && !/^\r?\n/.test(tail) ? "\n" : "";
+    return `${source.slice(0, section.after)}\n${replacement}${separator}${tail}`;
+  }
+
+  function comfyRewriteStructuredPrompt(source, prompt, role = "positive") {
+    const parsed = comfyParseStructuredSections(source);
+    const value = String(prompt || "").trim();
+    if (!parsed.sections.length) return value;
+    let rebuilt = String(parsed.source || "");
+    if (role === "negative") {
+      if (String(parsed.preamble || "").trim()) rebuilt = `${value}\n${rebuilt.slice(parsed.sections[0].start)}`;
+      const candidates = parsed.sections.filter((section) => comfyStructuredSectionPromptScore(section) >= 3);
+      for (const section of candidates) rebuilt = comfyReplaceStructuredSection(comfyParseStructuredSections(rebuilt), section.marker, value);
+      return rebuilt;
+    }
+    const scored = parsed.sections.map((section) => ({ section, score: comfyStructuredSectionPromptScore(section) }));
+    let targets = scored.filter((item) => item.score >= 5);
+    if (!targets.length) targets = scored.sort((a, b) => b.score - a.score).slice(0, 1).filter((item) => item.score > 0);
+    const shortContext = scored.filter((item) => item.score >= 0 && item.score < 5 && String(item.section.content || "").trim().length >= 12);
+    for (const target of targets) {
+      const group = comfyStructuredGroupKey(target.section.marker);
+      const prefixParts = shortContext.filter((item) => comfyStructuredGroupKey(item.section.marker) === group).map((item) => String(item.section.content || "").trim()).filter(Boolean);
+      const replacement = [...new Set(prefixParts), value].filter(Boolean).join(", ");
+      rebuilt = comfyReplaceStructuredSection(comfyParseStructuredSections(rebuilt), target.section.marker, replacement || value);
+    }
+    // Generic identity-resource sanitization. It keys off semantics and value shape, never a specific custom-node family.
+    let current = comfyParseStructuredSections(rebuilt);
+    for (const section of current.sections) {
+      const marker = String(section.marker || "");
+      const content = String(section.content || "").trim();
+      const identityResource = /(CHAR(?:ACTER)?|IDENTITY|FACE|LORA|ADAPTER|EMBED|CACHE|REFERENCE|REF|IPA)/i.test(marker);
+      if (!identityResource) continue;
+      let replacement = null;
+      if (/(ACTIVATE|ENABLE|ENABLED|USE)$/i.test(marker) && /^(?:true|false|0|1)$/i.test(content)) replacement = "false";
+      else if (/^[\[{]/.test(content)) replacement = content.trim().startsWith("[") ? "[]" : '{"list":[]}' ;
+      else if (/(?:CHAR(?:ACTER)?|IDENTITY)/i.test(marker) && content.length < 800) replacement = "";
+      else if (/\\|\/|\.safetensors\b|\.pt\b|\.ckpt\b|\.bin\b/i.test(content)) replacement = "";
+      if (replacement !== null) rebuilt = comfyReplaceStructuredSection(comfyParseStructuredSections(rebuilt), marker, replacement);
+      current = comfyParseStructuredSections(rebuilt);
+    }
+    return rebuilt;
+  }
+
+  function comfyFindTaggedScalarBinding(sourceCandidate, slot) {
+    if (!sourceCandidate?.value) return null;
+    const parsed = comfyParseStructuredSections(sourceCandidate.value);
+    if (!parsed.sections.length) return null;
+    const markerScore = (marker) => {
+      const raw = String(marker || "").toUpperCase();
+      if (slot === "width") return /WIDTH|(?:^|[_:\-])W$/.test(raw) ? 10 : 0;
+      if (slot === "height") return /HEIGHT|(?:^|[_:\-])H$/.test(raw) ? 10 : 0;
+      if (slot === "seed") return /SEED|RNG|NOISE[_:\-]?SEED/.test(raw) ? 10 : 0;
+      return 0;
+    };
+    const candidates = parsed.sections.map((section) => ({ section, score: markerScore(section.marker), numeric: Number(String(section.content || "").trim()) }))
+      .filter((item) => item.score > 0 && Number.isFinite(item.numeric))
+      .sort((a, b) => b.score - a.score);
+    if (!candidates.length) return null;
+    return { nodeId: sourceCandidate.nodeId, path: sourceCandidate.path, operation: "replace_tagged_value", marker: candidates[0].section.marker, valueType: slot === "seed" ? "integer" : "number" };
+  }
+
+  function comfySetPath(root, path, value) {
+    const parts = String(path || "").split(".").filter(Boolean);
+    if (!parts.length) return false;
+    let current = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const part = parts[i];
+      if (!current || typeof current !== "object" || !(part in current)) return false;
+      current = current[part];
+    }
+    if (!current || typeof current !== "object") return false;
+    current[parts[parts.length - 1]] = value;
+    return true;
+  }
+
+  function comfyGetPath(root, path) {
+    return String(path || "").split(".").filter(Boolean).reduce((current, part) => current && typeof current === "object" ? current[part] : undefined, root);
+  }
+
+  function comfyFindDirectScalarBinding(graph, sampler, slot) {
+    const keyCandidates = slot === "seed" ? ["seed", "noise_seed"] : [slot];
+    if (slot === "steps" || slot === "cfg" || slot === "sampler_name" || slot === "scheduler") {
+      for (const key of keyCandidates) {
+        const value = sampler?.node?.inputs?.[key];
+        if ((typeof value === "number" || typeof value === "string") && !comfyIsNodeRef(value)) return { nodeId: sampler.nodeId, path: `inputs.${key}`, operation: "set_value", valueType: slot === "steps" ? "integer" : slot === "cfg" ? "number" : "string", controlled: false };
+      }
+      return null;
+    }
+    if (slot === "seed") {
+      for (const key of keyCandidates) {
+        const value = sampler?.node?.inputs?.[key];
+        if (typeof value === "number" && !comfyIsNodeRef(value)) return { nodeId: sampler.nodeId, path: `inputs.${key}`, operation: "set_value", valueType: "integer", controlled: true };
+      }
+      return null;
+    }
+    if (slot === "width" || slot === "height") {
+      const latentRef = sampler?.node?.inputs?.latent_image || sampler?.node?.inputs?.latent;
+      const upstream = comfyCollectUpstream(graph, latentRef, 10);
+      for (const item of upstream) {
+        const value = item.node?.inputs?.[slot];
+        if (typeof value === "number" && !comfyIsNodeRef(value)) return { nodeId: item.nodeId, path: `inputs.${slot}`, operation: "set_value", valueType: "integer", controlled: true };
+      }
     }
     return null;
   }
 
-  function findSoyaTaggedSectionBounds(text, tag) {
-    const source = String(text || "");
-    const marker = `[${String(tag || "").trim().toUpperCase()}]`;
-    if (marker === "[]") return null;
-    const upper = source.toUpperCase();
-    const markerStart = upper.indexOf(marker);
-    if (markerStart < 0) return null;
-    const afterMarker = markerStart + marker.length;
-    const rest = source.slice(afterMarker);
-    const next = rest.match(/\r?\n(?=\[[A-Z0-9_]+\](?:\r?\n|$))/);
-    const end = next ? afterMarker + Number(next.index || 0) : source.length;
-    return { source, markerStart, afterMarker, end };
-  }
-
-  function readSoyaTaggedSection(text, tag) {
-    const bounds = findSoyaTaggedSectionBounds(text, tag);
-    if (!bounds) return "";
-    return bounds.source.slice(bounds.afterMarker, bounds.end).trim();
-  }
-
-  function writeSoyaTaggedSection(text, tag, value) {
-    const bounds = findSoyaTaggedSectionBounds(text, tag);
-    if (!bounds) return String(text || "");
-    const normalized = String(value ?? "").trim();
-    const replacement = normalized ? `\n${normalized}` : "";
-    return `${bounds.source.slice(0, bounds.afterMarker)}${replacement}${bounds.source.slice(bounds.end)}`;
-  }
-
-  function joinSoyaPromptParts(...parts) {
-    return parts.map((item) => String(item || "").trim()).filter(Boolean).join(", ");
-  }
-
-  function findSoyaNegativeSourceNode(graph, positiveSourceNodeId) {
-    const candidates = [];
-    for (const [nodeId, node] of Object.entries(graph || {})) {
-      if (String(nodeId) === String(positiveSourceNodeId)) continue;
-      if (String(node?.class_type || "") !== "PrimitiveStringMultiline") continue;
-      const value = String(node?.inputs?.value ?? "");
-      if (!value) continue;
-      const title = String(node?._meta?.title || "");
-      let score = 0;
-      if (/negative|부정/i.test(title)) score += 12;
-      if (/\[SDXL\]/i.test(value)) score += 4;
-      if (/worst quality|low quality|bad anatomy|extra fingers/i.test(value)) score += 3;
-      if (/\[ANIMA_CONTENT\]|\[ANIMA_ALL\]|\[IMG_W\]|\[CHAR_LIST\]/i.test(value)) score -= 12;
-      const regexConsumer = Object.values(graph || {}).some((consumer) => String(consumer?.class_type || "") === "RegexExtract" && comfyInputReferencesNode(consumer?.inputs, nodeId));
-      if (regexConsumer) score += 5;
-      if (score > 0) candidates.push({ nodeId: String(nodeId), node, value, score });
+  function analyzeComfyWorkflowBinding(workflow) {
+    const graph = comfyPromptGraph(workflow);
+    if (!graph || typeof graph !== "object") throw new Error("ComfyUI API workflow graph를 읽을 수 없습니다.");
+    const output = comfyFindOutputCandidate(graph);
+    if (!output) throw new Error("최종 이미지 Output 후보를 찾지 못했습니다.");
+    const sampler = comfyFindSamplerForOutput(graph, output);
+    if (!sampler) throw new Error("최종 출력으로 이어지는 샘플러를 찾지 못했습니다. Positive/Negative 입력이 연결된 생성 노드가 필요합니다.");
+    const positiveRoot = sampler.node?.inputs?.positive;
+    const negativeRoot = sampler.node?.inputs?.negative;
+    const positiveSource = comfyFindTextSource(graph, positiveRoot, "positive");
+    const negativeSource = comfyFindTextSource(graph, negativeRoot, "negative");
+    if (!positiveSource) throw new Error("Positive Prompt 원본 문자열을 그래프에서 추적하지 못했습니다.");
+    if (!negativeSource) throw new Error("Negative Prompt 원본 문자열을 그래프에서 추적하지 못했습니다.");
+    const positiveStructured = comfyParseStructuredSections(positiveSource.value).sections.length > 0;
+    const negativeStructured = comfyParseStructuredSections(negativeSource.value).sections.length > 0;
+    const bindings = [
+      { slot: "positive_prompt", nodeId: positiveSource.nodeId, path: positiveSource.path, operation: positiveStructured ? "rewrite_structured_prompt" : "set_value", role: "positive", valueType: "string" },
+      { slot: "negative_prompt", nodeId: negativeSource.nodeId, path: negativeSource.path, operation: negativeStructured ? "rewrite_structured_prompt" : "set_value", role: "negative", valueType: "string" },
+    ];
+    for (const slot of ["width", "height", "seed"]) {
+      let binding = comfyFindDirectScalarBinding(graph, sampler, slot);
+      if (!binding) binding = comfyFindTaggedScalarBinding(positiveSource, slot);
+      if (binding) bindings.push({ slot, ...binding, controlled: true });
     }
-    return candidates.sort((a, b) => b.score - a.score)[0] || null;
-  }
-
-  function rewriteSoyaNegativePayload(source, negativePrompt) {
-    const negative = String(negativePrompt || "").trim();
-    if (!negative) return String(source || "");
-    if (/\[SDXL\]/i.test(String(source || ""))) return `${negative}\n[SDXL]\n${negative}`;
-    return negative;
-  }
-
-  function prepareSoyaComfyWorkflow(workflow, vars) {
-    const cloned = JSON.parse(JSON.stringify(workflow));
-    const binding = findSoyaPromptParserBinding(cloned);
-    if (!binding) return null;
-    let positiveSource = String(binding.sourceNode?.inputs?.value || "");
-    if (!/\[(?:ANIMA_CONTENT|ANIMA_ALL|SDXL)\]/i.test(positiveSource)) {
-      throw new Error("Soya Prompt Parser 입력은 감지했지만 [ANIMA_CONTENT]/[ANIMA_ALL]/[SDXL] 섹션을 찾지 못했습니다.");
+    const effectiveReaders = {};
+    for (const slot of ["steps", "cfg", "sampler_name", "scheduler"]) {
+      const reader = comfyFindDirectScalarBinding(graph, sampler, slot);
+      if (reader) effectiveReaders[slot] = { nodeId: reader.nodeId, path: reader.path, valueType: reader.valueType };
     }
-    const animaQuality = readSoyaTaggedSection(positiveSource, "ANIMA_QUALITY");
-    const animaArtist = readSoyaTaggedSection(positiveSource, "ANIMA_ARTIST");
-    const sdxlQuality = readSoyaTaggedSection(positiveSource, "SDXL_QUALITY");
-    const sdxlArtist = readSoyaTaggedSection(positiveSource, "SDXL_ARTIST");
-    const positive = String(vars?.prompt || "").trim();
-    const animaAll = joinSoyaPromptParts(animaQuality, animaArtist, positive);
-    const sdxlAll = joinSoyaPromptParts(sdxlQuality, sdxlArtist, positive);
-    const sectionValues = {
-      ANIMA_CONTENT: positive,
-      ANIMA_ALL: animaAll || positive,
-      SDXL: sdxlAll || positive,
-      CHAR_LIST: "",
-      CACHE_PATH: '{"list":[]}',
-      FACE_ID_ACTIVATE: "false",
-      FACE_ID_DIR: '{"list":[]}',
-      LORA_ACTIVATE: "false",
-      LORA_DATA: '{"list":[]}',
-      FACE_LORA_ACTIVATE: "false",
-      FACE_LORA_DATA: '{"list":[]}',
-      STYLE_LORA_ACTIVATE: "false",
-      STYLE_LORA_DATA: '{"list":[]}',
-      CHAR_FACE_TAG_INFORM: '{"list":[]}',
-      ANIMA_FD_ACTIVATE: "false",
-      ANIMA_HD_ACTIVATE: "false",
-      ANIMA_ED_ACTIVATE: "false",
-      FD_ACTIVATE: "false",
-      HD_ACTIVATE: "false",
-      ED_ACTIVATE: "false",
-      IMG_W: String(Number(vars?.width) || 832),
-      IMG_H: String(Number(vars?.height) || 1216),
-      SEED: String(Number.isFinite(Number(vars?.seed)) ? Math.floor(Number(vars.seed)) : 0),
+    for (const slot of ["width", "height", "seed"]) {
+      const binding = bindings.find((item) => item.slot === slot);
+      if (binding) effectiveReaders[slot] = { nodeId: binding.nodeId, path: binding.path, operation: binding.operation, marker: binding.marker || "", valueType: binding.valueType };
+    }
+    const warnings = [];
+    for (const slot of ["width", "height", "seed"]) if (!bindings.some((item) => item.slot === slot)) warnings.push(`${slot}는 자동 바인딩하지 못해 Workflow 고정값을 사용합니다.`);
+    const profile = {
+      schema: COMFY_BINDING_PROFILE_SCHEMA,
+      version: COMFY_BINDING_PROFILE_VERSION,
+      topologyHash: comfyWorkflowTopologyHash(workflow),
+      output: { nodeId: output.nodeId, imageIndex: 0 },
+      sampler: { nodeId: sampler.nodeId },
+      bindings,
+      effectiveReaders,
+      analysis: {
+        confidence: warnings.length ? "medium" : "high",
+        warnings,
+        positiveSource: `${positiveSource.nodeId}:${positiveSource.path}`,
+        negativeSource: `${negativeSource.nodeId}:${negativeSource.path}`,
+        outputNodeId: output.nodeId,
+        samplerNodeId: sampler.nodeId,
+      },
     };
-    for (const [tag, value] of Object.entries(sectionValues)) positiveSource = writeSoyaTaggedSection(positiveSource, tag, value);
-    binding.sourceNode.inputs.value = positiveSource;
+    profile.profileHash = hashText(JSON.stringify(comfyStableValue({ ...profile, profileHash: undefined })));
+    return profile;
+  }
 
-    const negativeSource = findSoyaNegativeSourceNode(binding.graph, binding.sourceNodeId);
-    if (!negativeSource) throw new Error("Soya Prompt Parser workflow에서 부정 프롬프트 원본 노드를 찾지 못했습니다.");
-    negativeSource.node.inputs.value = rewriteSoyaNegativePayload(negativeSource.value, vars?.negative);
-
-    const previewNodeIds = Object.entries(binding.graph).filter(([, node]) => String(node?.class_type || "") === "PreviewImage").map(([id]) => String(id));
-    const saveNodeIds = Object.entries(binding.graph).filter(([, node]) => String(node?.class_type || "") === "SaveImage").map(([id]) => String(id));
-    return {
-      workflow: cloned,
-      mode: "soya_prompt_parser",
-      parserNodeId: binding.parserId,
-      positiveSourceNodeId: binding.sourceNodeId,
-      negativeSourceNodeId: negativeSource.nodeId,
-      previewNodeIds,
-      saveNodeIds,
+  function normalizeComfyBindingProfile(value, workflow = null) {
+    if (!value || typeof value !== "object") return null;
+    if (String(value.schema || "") !== COMFY_BINDING_PROFILE_SCHEMA) return null;
+    const profile = {
+      schema: COMFY_BINDING_PROFILE_SCHEMA,
+      version: COMFY_BINDING_PROFILE_VERSION,
+      topologyHash: String(value.topologyHash || "").trim(),
+      output: { nodeId: String(value.output?.nodeId || "").trim(), imageIndex: Math.max(0, Math.floor(Number(value.output?.imageIndex || 0))) },
+      sampler: { nodeId: String(value.sampler?.nodeId || "").trim() },
+      bindings: Array.isArray(value.bindings) ? value.bindings.map((item) => ({ ...item, slot: String(item?.slot || "").trim(), nodeId: String(item?.nodeId || "").trim(), path: String(item?.path || "").trim(), operation: String(item?.operation || "set_value").trim(), marker: String(item?.marker || "").trim(), role: String(item?.role || "").trim(), valueType: String(item?.valueType || "string").trim(), controlled: item?.controlled !== false })).filter((item) => item.slot && item.nodeId && item.path) : [],
+      effectiveReaders: value.effectiveReaders && typeof value.effectiveReaders === "object" ? value.effectiveReaders : {},
+      analysis: value.analysis && typeof value.analysis === "object" ? value.analysis : {},
     };
+    if (!profile.output.nodeId || !profile.bindings.some((item) => item.slot === "positive_prompt") || !profile.bindings.some((item) => item.slot === "negative_prompt")) return null;
+    if (workflow && profile.topologyHash && profile.topologyHash !== comfyWorkflowTopologyHash(workflow)) return null;
+    profile.profileHash = hashText(JSON.stringify(comfyStableValue({ ...profile, profileHash: undefined })));
+    return profile;
+  }
+
+  function resolveComfyBindingProfile(config, workflow) {
+    const raw = String(config?.workflowBindingJson || "").trim();
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        const normalized = normalizeComfyBindingProfile(parsed, workflow);
+        if (normalized) return { profile: normalized, source: "saved_profile" };
+      } catch (_) {}
+    }
+    const profile = analyzeComfyWorkflowBinding(workflow);
+    return { profile, source: "auto_analyzed" };
+  }
+
+  function comfyReadTaggedScalar(text, marker) {
+    const parsed = comfyParseStructuredSections(text);
+    const section = parsed.sections.find((item) => item.marker === marker);
+    if (!section) return null;
+    const value = Number(String(section.content || "").trim());
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function comfyApplyBinding(graph, binding, vars) {
+    const node = graph?.[binding.nodeId];
+    if (!node) throw new Error(`Binding node ${binding.nodeId}를 Workflow에서 찾지 못했습니다.`);
+    const slotValues = {
+      positive_prompt: String(vars?.prompt || ""),
+      negative_prompt: String(vars?.negative || ""),
+      width: Number(vars?.width || 0),
+      height: Number(vars?.height || 0),
+      seed: Number.isFinite(Number(vars?.seed)) ? Math.floor(Number(vars.seed)) : 0,
+      steps: Number(vars?.steps || 0),
+      cfg: Number(vars?.cfg || 0),
+      sampler_name: String(vars?.sampler || ""),
+      scheduler: String(vars?.scheduler || ""),
+    };
+    const value = slotValues[binding.slot];
+    const current = comfyGetPath(node, binding.path);
+    if (binding.operation === "rewrite_structured_prompt") {
+      if (typeof current !== "string") throw new Error(`${binding.slot} structured binding 대상이 문자열이 아닙니다.`);
+      return comfySetPath(node, binding.path, comfyRewriteStructuredPrompt(current, value, binding.role || (binding.slot === "negative_prompt" ? "negative" : "positive")));
+    }
+    if (binding.operation === "replace_tagged_value") {
+      if (typeof current !== "string" || !binding.marker) throw new Error(`${binding.slot} tagged binding 대상 또는 marker가 올바르지 않습니다.`);
+      const parsed = comfyParseStructuredSections(current);
+      const replacement = binding.valueType === "integer" ? String(Math.floor(Number(value) || 0)) : String(Number(value) || 0);
+      return comfySetPath(node, binding.path, comfyReplaceStructuredSection(parsed, binding.marker, replacement));
+    }
+    let typed = value;
+    if (binding.valueType === "integer") typed = Math.floor(Number(value) || 0);
+    else if (binding.valueType === "number") typed = Number(value) || 0;
+    else if (binding.valueType === "boolean") typed = Boolean(value);
+    else typed = String(value ?? "");
+    return comfySetPath(node, binding.path, typed);
+  }
+
+  function comfyReadEffectiveValue(graph, reader) {
+    const node = graph?.[String(reader?.nodeId || "")];
+    if (!node) return null;
+    const current = comfyGetPath(node, String(reader?.path || ""));
+    if (reader?.operation === "replace_tagged_value" && reader?.marker && typeof current === "string") return comfyReadTaggedScalar(current, reader.marker);
+    if (reader?.valueType === "integer" || reader?.valueType === "number") {
+      const number = Number(current);
+      return Number.isFinite(number) ? number : null;
+    }
+    return current ?? null;
+  }
+
+  function compileComfyWorkflow(config, vars) {
+    const resolved = resolveComfyWorkflowSource(config);
+    if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("ComfyUI workflow JSON이 비어 있거나 API workflow 형식이 아닙니다.");
+    const cloned = JSON.parse(JSON.stringify(resolved.workflow));
+    const graph = comfyPromptGraph(cloned);
+    const profileResult = resolveComfyBindingProfile(config, cloned);
+    const profile = profileResult.profile;
+    for (const binding of profile.bindings || []) {
+      if (binding.controlled === false && !["positive_prompt", "negative_prompt"].includes(binding.slot)) continue;
+      comfyApplyBinding(graph, binding, vars);
+    }
+    const effectiveValues = {};
+    for (const [slot, reader] of Object.entries(profile.effectiveReaders || {})) effectiveValues[slot] = comfyReadEffectiveValue(graph, reader);
+    const payload = cloned.prompt ? cloned : { prompt: cloned, client_id: `lia-${Date.now().toString(36)}` };
+    if (!payload.client_id) payload.client_id = `lia-${Date.now().toString(36)}`;
+    const executionHash = hashText(JSON.stringify(comfyStableValue(graph)));
+    appendDebugLog("persona_visual", "comfy_workflow_prepared", {
+      source: resolved.source,
+      mode: "generic_binding_engine",
+      bindingSource: profileResult.source,
+      topologyHash: profile.topologyHash,
+      bindingProfileHash: profile.profileHash,
+      executionHash,
+      outputNodeId: profile.output.nodeId,
+      samplerNodeId: profile.sampler.nodeId,
+      controlledSlots: profile.bindings.filter((item) => item.controlled !== false).map((item) => item.slot),
+      effectiveValues,
+      warnings: profile.analysis?.warnings || [],
+    }, "info");
+    return { payload, profile, effectiveValues, executionHash, topologyHash: profile.topologyHash, bindingProfileHash: profile.profileHash, outputNodeId: profile.output.nodeId, bindingSource: profileResult.source };
   }
 
   function prepareComfyWorkflowPayload(config, vars) {
-    const resolved = resolveComfyWorkflowSource(config);
-    if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("ComfyUI workflow JSON이 비어 있거나 API workflow 형식이 아닙니다.");
-    const soya = prepareSoyaComfyWorkflow(resolved.workflow, vars);
-    if (soya) {
-      const prepared = soya.workflow;
-      const payload = prepared.prompt ? prepared : { prompt: prepared, client_id: `lia-${Date.now().toString(36)}` };
-      if (!payload.client_id) payload.client_id = `lia-${Date.now().toString(36)}`;
-      appendDebugLog("persona_visual", "comfy_workflow_prepared", {
-        source: resolved.source,
-        mode: soya.mode,
-        parserNodeId: soya.parserNodeId,
-        positiveSourceNodeId: soya.positiveSourceNodeId,
-        negativeSourceNodeId: soya.negativeSourceNodeId,
-        previewNodeIds: soya.previewNodeIds,
-        saveNodeIds: soya.saveNodeIds,
-        width: Number(vars?.width || 0),
-        height: Number(vars?.height || 0),
-        seed: Number(vars?.seed || 0),
-      }, "info");
-      return payload;
-    }
-    const payload = renderTemplateValue(resolved.workflow.prompt ? resolved.workflow : { prompt: resolved.workflow, client_id: `lia-${Date.now().toString(36)}` }, vars);
-    if (!payload.client_id) payload.client_id = `lia-${Date.now().toString(36)}`;
-    appendDebugLog("persona_visual", "comfy_workflow_prepared", { source: resolved.source, mode: "template_variables" }, "debug");
-    return payload;
+    return compileComfyWorkflow(config, vars).payload;
   }
 
   async function responseToImageBytes(res, config) {
@@ -11686,7 +12495,10 @@ ${revisionText}`);
     if (type === "comfyui-local") {
       const resolved = resolveComfyWorkflowSource(config);
       if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("ComfyUI workflow JSON이 비어 있거나 API workflow 형식이 아닙니다.");
-      if (!findSoyaPromptParserBinding(resolved.workflow)) requireVars(resolved.raw || JSON.stringify(resolved.workflow), "ComfyUI workflow JSON");
+      const profile = resolveComfyBindingProfile(config, resolved.workflow).profile;
+      if (!profile?.bindings?.some((item) => item.slot === "positive_prompt") || !profile?.bindings?.some((item) => item.slot === "negative_prompt")) {
+        throw new Error("ComfyUI Workflow에서 Positive/Negative Prompt 바인딩을 만들지 못했습니다. Workflow Binding Profile을 확인해 주세요.");
+      }
     }
     if (type === "custom-json") requireVars(config.requestTemplateJson, "Custom JSON request template");
     return true;
@@ -11723,13 +12535,26 @@ ${revisionText}`);
     try {
       if (type === "comfyui-local") {
         const base = comfyBaseUrl(config.endpoint);
-        const payload = prepareComfyWorkflowPayload(config, vars);
+        const compiled = compileComfyWorkflow(config, vars);
+        if (visualLock?.confirmed) {
+          if (visualLock.workflowTopologyHash && visualLock.workflowTopologyHash !== compiled.topologyHash) throw new Error("Neutral 기준 확정 후 ComfyUI Workflow 구조가 변경되었습니다. Neutral 기준을 다시 만들어 주세요.");
+          if (visualLock.bindingProfileHash && visualLock.bindingProfileHash !== compiled.bindingProfileHash) throw new Error("Neutral 기준 확정 후 ComfyUI Binding Profile이 변경되었습니다. Neutral 기준을 다시 만들어 주세요.");
+        }
         const promptRes = await fetchWithTimeout(`${base}/prompt`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(compiled.payload),
         }, config.timeoutMs, "ComfyUI prompt");
-        if (!promptRes.ok) throw new Error(`ComfyUI prompt failed ${promptRes.status}`);
+        if (!promptRes.ok) {
+          const errorText = await promptRes.text().catch(() => "");
+          let detail = String(errorText || "").slice(0, 1200);
+          try {
+            const parsed = JSON.parse(errorText);
+            const nodeErrors = parsed?.node_errors && typeof parsed.node_errors === "object" ? Object.entries(parsed.node_errors).map(([nodeId, value]) => `${nodeId}: ${JSON.stringify(value)}`).slice(0, 6).join(" | ") : "";
+            detail = nodeErrors || String(parsed?.error?.message || parsed?.error || detail || "");
+          } catch (_) {}
+          throw new Error(`ComfyUI prompt failed ${promptRes.status}${detail ? `: ${detail}` : ""}`);
+        }
         const promptData = await promptRes.json();
         const promptId = String(promptData?.prompt_id || promptData?.promptId || promptData?.id || "").trim();
         if (!promptId) throw new Error("ComfyUI prompt_id를 받지 못했습니다.");
@@ -11739,13 +12564,16 @@ ${revisionText}`);
           if (historyRes.ok) {
             const history = await historyRes.json();
             const outputs = history?.[promptId]?.outputs || history?.outputs || {};
-            const image = Object.values(outputs).flatMap((output) => Array.isArray(output?.images) ? output.images : [])[0];
+            const selectedOutput = outputs?.[compiled.outputNodeId] || null;
+            const selectedImages = Array.isArray(selectedOutput?.images) ? selectedOutput.images : [];
+            const fallbackImage = Object.values(outputs).flatMap((output) => Array.isArray(output?.images) ? output.images : [])[0];
+            const image = selectedImages[Math.max(0, Number(compiled.profile?.output?.imageIndex || 0))] || fallbackImage;
             if (image?.filename) {
               const params = new URLSearchParams({ filename: image.filename, subfolder: image.subfolder || "", type: image.type || "output" });
               const imageRes = await fetchWithTimeout(`${base}/view?${params.toString()}`, { method: "GET" }, Math.min(30000, Math.max(5000, deadline - Date.now())), "ComfyUI image view");
               if (!imageRes.ok) throw new Error(`ComfyUI image view failed ${imageRes.status}`);
-              const result = { bytes: new Uint8Array(await imageRes.arrayBuffer()), prompt, negativePrompt, seed: vars.seed };
-              appendDebugLog("persona_visual", "image_generation_result", { ...summarizeVisualTargetForDebug(target), emotion: String(emotion || "").trim() || "neutral", providerType: type, seed: vars.seed, bytes: result.bytes?.length || 0, promptHash: hashText(String(prompt || "")), negativePromptHash: hashText(String(negativePrompt || "")), promptId }, "info");
+              const result = { bytes: new Uint8Array(await imageRes.arrayBuffer()), prompt, negativePrompt, seed: vars.seed, comfyExecution: { topologyHash: compiled.topologyHash, bindingProfileHash: compiled.bindingProfileHash, executionHash: compiled.executionHash, outputNodeId: compiled.outputNodeId, effectiveValues: compiled.effectiveValues, controlledSlots: compiled.profile.bindings.filter((item) => item.controlled !== false).map((item) => item.slot) } };
+              appendDebugLog("persona_visual", "image_generation_result", { ...summarizeVisualTargetForDebug(target), emotion: String(emotion || "").trim() || "neutral", providerType: type, seed: vars.seed, bytes: result.bytes?.length || 0, promptHash: hashText(String(prompt || "")), negativePromptHash: hashText(String(negativePrompt || "")), promptId, outputNodeId: compiled.outputNodeId, effectiveValues: compiled.effectiveValues }, "info");
               return result;
             }
           }
@@ -11962,6 +12790,24 @@ ${revisionText}`);
       promptOverride: String(options.promptOverride || "").trim(),
       negativePromptOverride: String(options.negativePromptOverride || "").trim(),
     });
+    if (normalizedEmotion === "neutral" && generated?.comfyExecution) {
+      const effective = generated.comfyExecution.effectiveValues || {};
+      generationSnapshot = normalizeVisualGenerationLock({
+        ...generationSnapshot,
+        width: Number.isFinite(Number(effective.width)) && Number(effective.width) > 0 ? Number(effective.width) : generationSnapshot.width,
+        height: Number.isFinite(Number(effective.height)) && Number(effective.height) > 0 ? Number(effective.height) : generationSnapshot.height,
+        seed: Number.isFinite(Number(effective.seed)) && Number(effective.seed) >= 0 ? Number(effective.seed) : generationSnapshot.seed,
+        steps: Number.isFinite(Number(effective.steps)) && Number(effective.steps) > 0 ? Number(effective.steps) : generationSnapshot.steps,
+        cfg: Number.isFinite(Number(effective.cfg)) && Number(effective.cfg) > 0 ? Number(effective.cfg) : generationSnapshot.cfg,
+        sampler: String(effective.sampler_name || generationSnapshot.sampler || "").trim(),
+        workflowTopologyHash: generated.comfyExecution.topologyHash,
+        workflowExecutionHash: generated.comfyExecution.executionHash,
+        bindingProfileHash: generated.comfyExecution.bindingProfileHash,
+        comfyOutputNodeId: generated.comfyExecution.outputNodeId,
+        comfyControlledSlots: generated.comfyExecution.controlledSlots || [],
+        comfyEffectiveValues: effective,
+      }, { confirmed: false });
+    }
     if (typeof api.saveAsset !== "function") throw new Error("RisuAI saveAsset API를 사용할 수 없습니다.");
     const sourceBytes = generated?.bytes instanceof Uint8Array
       ? new Uint8Array(generated.bytes)
@@ -12006,8 +12852,8 @@ ${revisionText}`);
       negativePrompt: generated.negativePrompt,
       provider: generationConfig.provider,
       seed: generated.seed,
-      width: generationConfig.width,
-      height: generationConfig.height,
+      width: Number(generationSnapshot?.width || generationConfig.width),
+      height: Number(generationSnapshot?.height || generationConfig.height),
       generatedAt: new Date().toISOString(),
       mime,
       backupId: backupBytes ? backupId : "",
@@ -12250,6 +13096,317 @@ ${revisionText}`);
     }
   }
 
+  function personaVisualAssetBundleZipFilename(target = {}) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const prefix = String(target?.assetPrefix || target?.personaName || 'persona_assets')
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(/\s+/g, '_')
+      .replace(/[^\p{L}\p{N}_-]+/gu, '')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 48) || 'persona_assets';
+    return `lia_persona_assets_${prefix}_${stamp}.zip`;
+  }
+
+  async function exportPersonaVisualAssetBundleZip(target = {}) {
+    const freshStore = await readPersonaVisualAssetStore();
+    // The caller passes an already-resolved visual target, not a full getContext() object.
+    // Re-resolving that target dropped personaInfo/char/chat and could reach
+    // fallbackPersonaIdStem() with ctx.personaInfo === undefined (notably after a
+    // random LIA result existed), producing "Cannot read properties of undefined (reading 'persona')".
+    // Keep the resolved identity and refresh only its persisted asset bundle.
+    const suppliedTarget = target && typeof target === "object" ? target : {};
+    const personaKey = String(suppliedTarget.personaKey || "").trim();
+    if (!personaKey) throw new Error("내보낼 감정 에셋 타겟을 확인하지 못했습니다.");
+    const persistedBundle = freshStore.sets?.[personaKey] || null;
+    const effectiveTarget = {
+      ...suppliedTarget,
+      personaKey,
+      personaId: String(suppliedTarget.personaId || persistedBundle?.personaId || "").trim(),
+      personaName: String(suppliedTarget.personaName || persistedBundle?.personaName || "Persona").trim() || "Persona",
+      assetPrefix: String(suppliedTarget.assetPrefix || persistedBundle?.assetPrefix || "").trim(),
+      sourceType: String(suppliedTarget.sourceType || persistedBundle?.sourceType || "persona").trim() || "persona",
+      identitySummary: String(suppliedTarget.identitySummary || persistedBundle?.identitySummary || "").trim(),
+      promptBasis: String(suppliedTarget.promptBasis || persistedBundle?.promptBasis || "").trim(),
+      bundle: persistedBundle || suppliedTarget.bundle || null,
+    };
+    const bundle = normalizeVisualAssetSet(effectiveTarget.bundle || {}, effectiveTarget.personaKey);
+    appendDebugLog("persona_visual", "asset_bundle_export_start", {
+      personaKey: effectiveTarget.personaKey,
+      personaId: effectiveTarget.personaId,
+      personaName: effectiveTarget.personaName,
+      sourceType: effectiveTarget.sourceType,
+      assetCount: Object.keys(bundle.images || {}).length,
+      persistedBundle: Boolean(persistedBundle),
+    }, "debug");
+    const emotions = Object.keys(bundle.images || {});
+    if (!emotions.length) throw new Error('내보낼 감정 에셋이 없습니다.');
+    const zipEntries = [];
+    const manifestImages = [];
+    const usedNames = new Set();
+    for (const emotion of emotions) {
+      const entry = normalizeVisualAssetEntry(bundle.images[emotion], emotion);
+      const available = await ensurePersonaVisualAssetAvailable(entry, { personaKey: effectiveTarget.personaKey, emotion: entry.emotion, backupId: entry.backupId, mime: entry.mime });
+      if (!available?.bytes?.length || !hasImageFileSignature(available.bytes)) throw new Error(`${entry.emotion} 에셋 이미지 바이트를 읽지 못했습니다.`);
+      const ext = detectImageExtFromBytes(available.bytes);
+      let baseName = `images/${emotionAssetSlug(entry.emotion)}.${ext}`;
+      let suffix = 2;
+      while (usedNames.has(baseName)) {
+        baseName = `images/${emotionAssetSlug(entry.emotion)}_${suffix}.${ext}`;
+        suffix += 1;
+      }
+      usedNames.add(baseName);
+      zipEntries.push({ name: baseName, bytes: available.bytes });
+      manifestImages.push({
+        emotion: entry.emotion,
+        assetName: entry.assetName,
+        prompt: entry.prompt,
+        negativePrompt: entry.negativePrompt,
+        provider: entry.provider,
+        mime: entry.mime || `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+        seed: entry.seed,
+        width: entry.width,
+        height: entry.height,
+        generatedAt: entry.generatedAt,
+        isAnchor: entry.isAnchor === true,
+        previewText: entry.previewText,
+        lockHash: entry.lockHash,
+        generationSnapshot: entry.generationSnapshot || null,
+        fileName: baseName,
+      });
+    }
+    const manifest = {
+      schema: PERSONA_VISUAL_ASSET_EXPORT_SCHEMA,
+      exportedAt: new Date().toISOString(),
+      plugin: { name: PLUGIN_DISPLAY_NAME, version: PLUGIN_VERSION },
+      source: {
+        personaKey: effectiveTarget.personaKey,
+        personaId: effectiveTarget.personaId,
+        personaName: effectiveTarget.personaName,
+        assetPrefix: effectiveTarget.assetPrefix,
+        sourceType: effectiveTarget.sourceType,
+        identitySummary: effectiveTarget.identitySummary,
+        promptBasis: effectiveTarget.promptBasis,
+      },
+      bundle: {
+        anchorEmotion: bundle.anchorEmotion || 'neutral',
+        visualLockCandidate: bundle.visualLockCandidate || null,
+        visualLock: bundle.visualLock || null,
+        images: manifestImages,
+      },
+    };
+    zipEntries.unshift({ name: 'manifest.json', bytes: new TextEncoder().encode(JSON.stringify(manifest, null, 2)) });
+    const bytes = createStoredZip(zipEntries);
+    appendDebugLog('persona_visual', 'asset_bundle_export_ready', { personaKey: effectiveTarget.personaKey, personaName: effectiveTarget.personaName, assetCount: manifestImages.length, zipBytes: bytes.length }, 'info');
+    return { fileName: personaVisualAssetBundleZipFilename(effectiveTarget), bytes, manifest, assetCount: manifestImages.length, target: effectiveTarget };
+  }
+
+  async function importPersonaVisualAssetBundleZip(target, source) {
+    const data = source instanceof Uint8Array ? source : await visualAssetDataToBytes(source);
+    if (!data?.length || !isZipBytes(data)) throw new Error('ZIP 파일을 읽지 못했거나 형식이 올바르지 않습니다.');
+    const entries = await unpackZipEntries(data);
+    const manifestEntry = entries.find((item) => String(item?.name || '').toLowerCase() === 'manifest.json');
+    if (!manifestEntry?.bytes?.length) throw new Error('ZIP 안에서 manifest.json을 찾지 못했습니다.');
+    let manifest = null;
+    try {
+      manifest = JSON.parse(new TextDecoder('utf-8').decode(manifestEntry.bytes));
+    } catch (error) {
+      throw new Error(`ZIP manifest 해석에 실패했습니다: ${error?.message || error}`);
+    }
+    if (String(manifest?.schema || '') !== PERSONA_VISUAL_ASSET_EXPORT_SCHEMA) throw new Error('이 ZIP은 LIA 감정 에셋 묶음 형식이 아닙니다.');
+    const manifestImages = Array.isArray(manifest?.bundle?.images) ? manifest.bundle.images : [];
+    if (!manifestImages.length) throw new Error('ZIP 안에 복원할 감정 에셋 항목이 없습니다.');
+    const entryMap = new Map(entries.map((item) => [String(item.name || ''), item]));
+    const incomingPersonaName = String(manifest?.source?.personaName || '').trim();
+    if (incomingPersonaName && String(target?.personaName || '').trim() && incomingPersonaName.toLowerCase() !== String(target.personaName || '').trim().toLowerCase()) {
+      const ok = typeof globalThis.confirm === 'function'
+        ? globalThis.confirm(`이 ZIP은 '${incomingPersonaName}'용 감정 에셋 묶음입니다.
+현재 선택된 타겟 '${target.personaName}'에 그대로 복원할까요?`)
+        : true;
+      if (!ok) throw new Error('ZIP 복원을 취소했습니다.');
+    }
+    if (typeof api.saveAsset !== 'function') throw new Error('RisuAI saveAsset API를 사용할 수 없습니다.');
+    const restoredImages = {};
+    for (const rawItem of manifestImages) {
+      const emotion = String(rawItem?.emotion || '').trim();
+      const fileName = String(rawItem?.fileName || '').trim();
+      if (!emotion || !fileName) continue;
+      const zipItem = entryMap.get(fileName);
+      if (!zipItem?.bytes?.length) throw new Error(`ZIP 안의 이미지가 누락되었습니다: ${fileName}`);
+      if (!hasImageFileSignature(zipItem.bytes)) throw new Error(`ZIP 이미지가 손상되었거나 형식이 올바르지 않습니다: ${fileName}`);
+      const bytesCopy = new Uint8Array(zipItem.bytes);
+      const assetPath = await api.saveAsset(bytesCopy);
+      const ext = detectImageExtFromBytes(zipItem.bytes);
+      const mime = String(rawItem?.mime || `image/${ext === 'jpg' ? 'jpeg' : ext}`).trim() || `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+      const backupId = visualAssetBackupIdForKey(target.personaKey, emotion);
+      let backupBytes = zipItem.bytes.length;
+      try {
+        const backup = await writePersonaVisualAssetBackup(backupId, zipItem.bytes, mime);
+        backupBytes = Number(backup?.bytes || zipItem.bytes.length) || zipItem.bytes.length;
+      } catch (error) {
+        appendDebugLog('persona_visual', 'asset_bundle_import_backup_failed', { personaKey: target.personaKey, emotion, backupId, error: errorForLog(error) }, 'warn');
+      }
+      restoredImages[emotion] = normalizeVisualAssetEntry({
+        emotion,
+        assetPath,
+        assetName: String(rawItem?.assetName || `${target.assetPrefix}_${emotionAssetSlug(emotion)}`).trim(),
+        prompt: String(rawItem?.prompt || '').trim(),
+        negativePrompt: String(rawItem?.negativePrompt || '').trim(),
+        provider: normalizeIllustrationProviderType(rawItem?.provider || 'wellspring-nai'),
+        mime,
+        seed: Number.isFinite(Number(rawItem?.seed)) ? Math.floor(Number(rawItem.seed)) : -1,
+        width: Number.isFinite(Number(rawItem?.width)) ? Math.floor(Number(rawItem.width)) : 0,
+        height: Number.isFinite(Number(rawItem?.height)) ? Math.floor(Number(rawItem.height)) : 0,
+        generatedAt: String(rawItem?.generatedAt || new Date().toISOString()),
+        isAnchor: emotion === 'neutral' || rawItem?.isAnchor === true,
+        previewText: String(rawItem?.previewText || emotion).trim(),
+        lockHash: String(rawItem?.lockHash || '').trim(),
+        backupId,
+        backupBytes,
+        generationSnapshot: normalizeVisualGenerationLock(rawItem?.generationSnapshot || null, { confirmed: false }),
+      }, emotion);
+    }
+    const store = await readPersonaVisualAssetStore();
+    const sets = { ...(store.sets || {}) };
+    const legacy = target.legacyPersonaKey && target.legacyPersonaKey !== target.personaKey ? sets[target.legacyPersonaKey] : null;
+    const fallback = target.fallbackPersonaKey && target.fallbackPersonaKey !== target.personaKey ? sets[target.fallbackPersonaKey] : null;
+    const nextBundle = normalizeVisualAssetSet({
+      personaKey: target.personaKey,
+      personaId: target.personaId,
+      personaName: target.personaName,
+      assetPrefix: target.assetPrefix,
+      sourceType: target.sourceType,
+      identityHash: hashText(target.identitySummary || target.promptBasis || target.personaKey),
+      identitySummary: target.identitySummary,
+      promptBasis: target.promptBasis,
+      updatedAt: new Date().toISOString(),
+      anchorEmotion: 'neutral',
+      visualLockCandidate: manifest?.bundle?.visualLockCandidate || null,
+      visualLock: manifest?.bundle?.visualLock || null,
+      images: restoredImages,
+    }, target.personaKey);
+    sets[target.personaKey] = nextBundle;
+    if (legacy && target.legacyPersonaKey !== target.personaKey) delete sets[target.legacyPersonaKey];
+    if (fallback && target.fallbackPersonaKey !== target.personaKey) delete sets[target.fallbackPersonaKey];
+    await writePersonaVisualAssetStore({ ...store, updatedAt: new Date().toISOString(), sets });
+    revokeVisualAssetObjectUrls();
+    appendDebugLog('persona_visual', 'asset_bundle_import_complete', {
+      personaKey: target.personaKey,
+      personaName: target.personaName,
+      importedFrom: incomingPersonaName,
+      assetCount: Object.keys(nextBundle.images || {}).length,
+      zipBytes: data.length,
+    }, 'info');
+    return { bundle: nextBundle, importedFrom: incomingPersonaName || target.personaName, assetCount: Object.keys(nextBundle.images || {}).length };
+  }
+
+  async function readImageSizeFromBytes(bytes, mime = "image/png") {
+    const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+    if (!data.length || typeof Blob === "undefined" || typeof URL === "undefined" || typeof Image === "undefined") return { width: 0, height: 0 };
+    const blob = new Blob([data], { type: mime || "image/png" });
+    const url = URL.createObjectURL(blob);
+    try {
+      return await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ width: Number(img.naturalWidth || img.width || 0) || 0, height: Number(img.naturalHeight || img.height || 0) || 0 });
+        img.onerror = () => resolve({ width: 0, height: 0 });
+        img.src = url;
+      });
+    } finally {
+      try { URL.revokeObjectURL(url); } catch (_) {}
+    }
+  }
+
+  async function importPersonaVisualAssetImage(target, emotion, source) {
+    const normalizedEmotion = String(emotion || "").trim();
+    if (!normalizedEmotion) throw new Error("감정 이름이 비어 있습니다.");
+    if (typeof api.saveAsset !== "function") throw new Error("RisuAI saveAsset API를 사용할 수 없습니다.");
+    const sourceBytes = source instanceof Uint8Array ? new Uint8Array(source) : await visualAssetDataToBytes(source);
+    if (!sourceBytes?.length || !hasImageFileSignature(sourceBytes)) throw new Error("업로드한 이미지가 비어 있거나 지원하지 않는 형식입니다. PNG/JPG/WEBP/GIF/AVIF 이미지를 사용해 주세요.");
+    const ext = detectImageExtFromBytes(sourceBytes);
+    const mime = String((source?.type || `image/${ext === "jpg" ? "jpeg" : ext}`) || `image/${ext === "jpg" ? "jpeg" : ext}`).trim() || `image/${ext === "jpg" ? "jpeg" : ext}`;
+    const size = await readImageSizeFromBytes(sourceBytes, mime);
+    const saveBytes = new Uint8Array(sourceBytes);
+    const assetPath = await api.saveAsset(saveBytes);
+    const backupId = visualAssetBackupIdForKey(target.personaKey, normalizedEmotion);
+    let backupBytes = sourceBytes.length;
+    try {
+      const backupResult = await writePersonaVisualAssetBackup(backupId, sourceBytes, mime);
+      backupBytes = Number(backupResult?.bytes || sourceBytes.length) || sourceBytes.length;
+    } catch (error) {
+      appendDebugLog("persona_visual", "manual_asset_backup_failed", {
+        personaKey: target.personaKey,
+        personaName: target.personaName,
+        emotion: normalizedEmotion,
+        backupId,
+        error: errorForLog(error),
+      }, "warn");
+    }
+    const store = await readPersonaVisualAssetStore();
+    const sets = { ...(store.sets || {}) };
+    const legacy = target.legacyPersonaKey && target.legacyPersonaKey !== target.personaKey ? sets[target.legacyPersonaKey] : null;
+    const fallback = target.fallbackPersonaKey && target.fallbackPersonaKey !== target.personaKey ? sets[target.fallbackPersonaKey] : null;
+    const current = normalizeVisualAssetSet(sets[target.personaKey] || legacy || fallback || {
+      personaKey: target.personaKey,
+      personaId: target.personaId,
+      personaName: target.personaName,
+      assetPrefix: target.assetPrefix,
+      sourceType: target.sourceType,
+      identityHash: hashText(target.identitySummary || target.promptBasis || target.personaKey),
+      identitySummary: target.identitySummary,
+      promptBasis: target.promptBasis,
+      images: {},
+      anchorEmotion: "neutral",
+    }, target.personaKey);
+    current.personaKey = target.personaKey;
+    current.personaId = target.personaId;
+    current.personaName = target.personaName;
+    current.assetPrefix = target.assetPrefix;
+    current.sourceType = target.sourceType;
+    current.identitySummary = target.identitySummary;
+    current.promptBasis = target.promptBasis;
+    current.updatedAt = new Date().toISOString();
+    const previous = normalizeVisualAssetEntry(current.images?.[normalizedEmotion] || {}, normalizedEmotion);
+    current.images[normalizedEmotion] = normalizeVisualAssetEntry({
+      emotion: normalizedEmotion,
+      assetPath,
+      assetName: previous.assetName || `${target.assetPrefix}_${emotionAssetSlug(normalizedEmotion)}`,
+      prompt: previous.prompt || "",
+      negativePrompt: previous.negativePrompt || "",
+      provider: previous.provider || normalizeIllustrationProviderType(readIllustrationConfig().provider),
+      mime,
+      seed: previous.seed >= 0 ? previous.seed : -1,
+      width: Number(size?.width || 0) || previous.width || 0,
+      height: Number(size?.height || 0) || previous.height || 0,
+      generatedAt: new Date().toISOString(),
+      isAnchor: normalizedEmotion === "neutral",
+      previewText: normalizedEmotion,
+      lockHash: previous.lockHash || String(current.visualLock?.lockHash || current.visualLockCandidate?.lockHash || ""),
+      backupId,
+      backupBytes,
+      generationSnapshot: previous.generationSnapshot || null,
+    }, normalizedEmotion);
+    Object.values(current.images).forEach((item) => { item.isAnchor = item.emotion === "neutral"; });
+    sets[target.personaKey] = current;
+    if (legacy && target.legacyPersonaKey !== target.personaKey) delete sets[target.legacyPersonaKey];
+    if (fallback && target.fallbackPersonaKey !== target.personaKey) delete sets[target.fallbackPersonaKey];
+    await writePersonaVisualAssetStore({ ...store, updatedAt: new Date().toISOString(), sets });
+    revokeVisualAssetObjectUrls();
+    appendDebugLog("persona_visual", "manual_asset_import_complete", {
+      personaKey: target.personaKey,
+      personaName: target.personaName,
+      emotion: normalizedEmotion,
+      assetPath,
+      mime,
+      width: Number(size?.width || 0) || 0,
+      height: Number(size?.height || 0) || 0,
+      bytes: sourceBytes.length,
+      preservedVisualLock: Boolean(current.visualLock?.confirmed),
+    }, "info");
+    return { bundle: current, entry: current.images[normalizedEmotion] };
+  }
+
   function waitForVisualAssetImageLoad(img, timeoutMs = 5000) {
     return new Promise((resolve, reject) => {
       if (!img) return reject(new Error("이미지 요소가 없습니다."));
@@ -12321,14 +13478,29 @@ ${revisionText}`);
     const cards = [];
     const seen = new Set();
     ordered.forEach((emotion) => {
-      const entry = bundle?.images?.[emotion];
-      if (!entry) return;
-      seen.add(emotion);
-      cards.push(entry);
+      const normalizedEmotion = String(emotion || "").trim();
+      if (!normalizedEmotion || seen.has(normalizedEmotion)) return;
+      seen.add(normalizedEmotion);
+      cards.push({ emotion: normalizedEmotion, entry: bundle?.images?.[normalizedEmotion] || null, placeholder: !(bundle?.images?.[normalizedEmotion]) });
     });
-    Object.values(bundle?.images || {}).forEach((entry) => { if (!seen.has(entry.emotion)) cards.push(entry); });
+    Object.values(bundle?.images || {}).forEach((entry) => {
+      const normalizedEmotion = String(entry?.emotion || "").trim();
+      if (!normalizedEmotion || seen.has(normalizedEmotion)) return;
+      seen.add(normalizedEmotion);
+      cards.push({ emotion: normalizedEmotion, entry, placeholder: false });
+    });
     if (!cards.length) return `<div class="lia-empty-result"><div class="lia-empty-orb">🖼</div><strong>아직 저장된 감정 에셋이 없습니다.</strong><p>Neutral을 먼저 만들고 결과를 확인한 뒤 Generation Lock을 확정하세요.</p></div>`;
-    return cards.map((entry) => {
+    return cards.map((card) => {
+      if (card.placeholder || !card.entry?.assetPath) {
+        return `
+      <article class="lia-asset-card lia-asset-card-empty" data-visual-asset-card="${htmlEscape(card.emotion)}">
+        <div class="lia-asset-card-top"><strong>${htmlEscape(card.emotion)}</strong><button class="lia-asset-upload-inline" type="button" data-visual-asset-manual-upload="${htmlEscape(card.emotion)}" title="이 감정 칸에 이미지 업로드" aria-label="${htmlEscape(card.emotion)} 이미지 업로드">＋</button></div>
+        <div class="lia-asset-thumb lia-asset-thumb-empty"><span>비어 있는 감정 에셋 칸</span></div>
+        <div class="lia-asset-meta"><small>아직 저장된 이미지가 없습니다. 오른쪽 위 ＋ 버튼을 눌러 탐색기에서 이미지를 선택해 수동으로 붙여넣을 수 있습니다.</small></div>
+        <div class="lia-asset-actions"><button class="btn-soft" type="button" data-visual-asset-manual-upload="${htmlEscape(card.emotion)}">이미지 업로드</button></div>
+      </article>`;
+      }
+      const entry = card.entry;
       const stale = entry.emotion !== "neutral" && Boolean((bundle?.visualLockCandidate && !bundle?.visualLock?.confirmed) || (bundle?.visualLock?.lockHash && String(entry.lockHash || "") !== String(bundle.visualLock.lockHash || "")));
       return `
       <article class="lia-asset-card" data-visual-asset-card="${htmlEscape(entry.emotion)}">
@@ -12779,6 +13951,8 @@ ${revisionText}`);
           <label class="lia-field lia-field-full"><span>Response Path (JSON 응답일 때)</span><input id="dpg-img-response-path" type="text" value="${htmlEscape(config.responsePath)}" placeholder="data.0.image"></label>
           <label class="lia-field lia-field-full"><span>Custom Request Template JSON</span><textarea id="dpg-img-request-template" class="lia-provider-json" spellcheck="false" placeholder='{"prompt":"{{prompt}}","negative_prompt":"{{negative}}"}'>${htmlEscape(config.requestTemplateJson)}</textarea></label>
           <label class="lia-field lia-field-full"><span>ComfyUI Workflow JSON</span><textarea id="dpg-img-workflow" class="lia-provider-json" spellcheck="false" placeholder='{"prompt":{...},"client_id":"lia"}'>${htmlEscape(config.workflowJson)}</textarea></label>
+          <div class="lia-field lia-field-full lia-comfy-binding-tools"><span>ComfyUI Workflow Binding</span><div class="lia-asset-add-actions"><button id="dpg-img-analyze-workflow" class="btn-soft" type="button">워크플로우 자동 분석</button><button id="dpg-img-test-workflow" class="btn-soft" type="button">연결·노드 검사</button></div><small>특정 커스텀 노드 이름에 의존하지 않고 최종 Output에서 그래프를 역추적합니다. 비워두면 저장/생성 시 자동 분석합니다.</small></div>
+          <label class="lia-field lia-field-full"><span>Binding Profile JSON</span><textarea id="dpg-img-binding-profile" class="lia-provider-json lia-comfy-binding-json" spellcheck="false" placeholder='자동 분석 시 생성됩니다.'>${htmlEscape(config.workflowBindingJson)}</textarea></label>
           <label class="lia-field lia-field-full"><span>Advanced JSON</span><textarea id="dpg-img-advanced" class="lia-provider-json" spellcheck="false" placeholder='{"sm":true}'>${htmlEscape(config.advancedJson)}</textarea></label>
         </div>
       </details>
@@ -12793,7 +13967,10 @@ ${revisionText}`);
     const selectedTargetValue = currentVisualTargetSelectionValue();
     const bundle = target.bundle || normalizeVisualAssetSet({}, target.personaKey);
     const emotions = (preservedVisualEmotionText || "").trim() || "neutral\ngentle smile\nhappy\nangry\nsad\nembarrassed\njealous\nsurprised\nworried\ndetermined\naffectionate\nexhausted";
-    const gallery = renderAssetGalleryCards(bundle, unique(emotions.split(/\r?\n|,/).map((item) => String(item || "").trim()).filter(Boolean), 24));
+    const gallery = renderAssetGalleryCards(bundle, unique(emotions.split(/\r?\n|,/).map((item) => String(item || "").trim()).filter(Boolean), 48));
+    const canAddCustomEmotion = Boolean(bundle.images?.neutral && bundle.visualLock?.confirmed);
+    const assetPresetStore = normalizeVisualAssetPresetStore(preservedVisualAssetPresetStore || {});
+    const assetPresetOptions = assetPresetStore.items.map((preset) => `<option value="${htmlEscape(preset.id)}"${preset.id === preservedVisualAssetPresetId ? " selected" : ""}>${htmlEscape(preset.name)}</option>`).join("");
     return `
       <section class="lia-page-hero lia-asset-hero"><span class="lia-section-eyebrow">PERSONA ASSET STUDIO</span><h2>감정 에셋</h2><p>Neutral을 Visual Master로 먼저 만들고 생성 조건을 확정한 뒤, 같은 Positive/Negative Prompt·seed·sampling·구도 조건에서 표정만 바꿔 감정 에셋을 만듭니다. 별도 Reference 노드는 필요하지 않습니다.</p></section>
       <section class="lia-asset-page-grid">
@@ -12806,6 +13983,16 @@ ${revisionText}`);
             <div class="lia-preview-box"><h3>저장 상태</h3><p>${htmlEscape(Object.keys(bundle.images || {}).length ? `${Object.keys(bundle.images || {}).length}개 저장됨 · Neutral Master ${bundle.images?.neutral ? "있음" : "없음"}` : "저장된 감정 에셋 없음")}</p></div>
             <div class="lia-preview-box"><h3>Visual Generation Lock</h3><p>${htmlEscape(bundle.visualLock?.confirmed ? `확정됨 · seed ${bundle.visualLock.seed} · ${bundle.visualLock.width}×${bundle.visualLock.height} · ${bundle.visualLock.sampler} · ${visualCompositionPresetDefinition(bundle.visualLock.compositionPreset).label}` : bundle.visualLockCandidate ? `Neutral 생성 완료 · 기준 확정 필요 · ${visualCompositionPresetDefinition(bundle.visualLockCandidate?.compositionPreset).label}` : "미생성 · 먼저 Neutral을 만드세요")}</p></div>
             <div class="lia-preview-box"><h3>배경 규칙</h3><p>순백색 고정 · Positive/Negative Prompt 양쪽에서 강제 · 투명/장면 배경 사용 안 함</p></div>
+          </div>
+          <div class="lia-asset-preset-box lia-field-full">
+            <div class="lia-asset-preset-head"><div><span class="lia-kicker">ASSET PRESET</span><strong>감정 에셋 프리셋</strong></div><small>Persona 고유 이미지와 Visual Lock은 저장하지 않습니다.</small></div>
+            <label class="lia-field lia-field-full"><span>저장된 프리셋</span><select id="dpg-asset-preset-select"><option value="">프리셋 선택</option>${assetPresetOptions}</select></label>
+            <div class="lia-asset-preset-actions">
+              <button id="dpg-asset-preset-load" class="btn-soft" type="button"${preservedVisualAssetPresetId ? "" : " disabled"}>불러오기</button>
+              <button id="dpg-asset-preset-delete" class="btn-danger" type="button"${preservedVisualAssetPresetId ? "" : " disabled"}>삭제</button>
+            </div>
+            <label class="lia-field lia-field-full"><span>현재 구성을 프리셋으로 저장</span><input id="dpg-asset-preset-name" type="text" maxlength="64" autocomplete="off" placeholder="예: 기본 12감정, 상반신 RP용"></label>
+            <button id="dpg-asset-preset-save" class="btn-primary" type="button">프리셋 저장</button>
           </div>
           <label class="lia-field lia-field-full"><span>감정 목록</span><textarea id="dpg-asset-emotions" class="lia-guidance-textarea" spellcheck="false" placeholder="neutral\nhappy\nangry">${htmlEscape(emotions)}</textarea><small>Neutral은 Visual Master입니다. 나머지는 확정된 생성 조건을 그대로 쓰고 표정만 바꿉니다.</small></label>
           <label class="lia-field lia-field-full"><span>추가 스타일 메모</span><textarea id="dpg-asset-style-notes" class="lia-guidance-textarea" spellcheck="false" placeholder="예: 셀 애니풍, 선이 또렷하게">${htmlEscape(preservedVisualStyleNotes || "")}</textarea><small>Neutral 생성 시 Generation Lock 후보에 포함됩니다. 기준 확정 뒤에는 감정별로 변경되지 않습니다.</small></label>
@@ -12826,6 +14013,27 @@ ${revisionText}`);
         <main class="lia-panel lia-asset-gallery-panel">
           <div class="lia-panel-title"><div><span class="lia-kicker">GALLERY</span><h2>저장된 감정 에셋</h2></div><span>${htmlEscape(Object.keys(bundle.images || {}).length.toString())}</span></div>
           <div class="lia-asset-gallery">${gallery}</div>
+          <div class="lia-asset-add-zone">
+            <button id="dpg-asset-add-toggle" class="lia-asset-add-button btn-soft" type="button"${canAddCustomEmotion ? "" : " disabled"}>＋ 감정 에셋 추가</button>
+            <div id="dpg-asset-add-form" class="lia-asset-add-form" hidden>
+              <label class="lia-field lia-field-full"><span>추가할 감정</span><input id="dpg-asset-add-emotion" type="text" maxlength="64" autocomplete="off" placeholder="예: smug, sleepy, delighted, 긴장한 미소"></label>
+              <div class="lia-asset-add-actions">
+                <button id="dpg-asset-add-create" class="btn-primary" type="button">이 감정 에셋 생성</button>
+                <button id="dpg-asset-add-cancel" class="btn-soft" type="button">취소</button>
+              </div>
+              <small>확정된 Neutral Master의 동일성·seed·구도·sampling·스타일 조건을 그대로 사용하고 입력한 감정 표현만 추가합니다.</small>
+            </div>
+            ${canAddCustomEmotion ? "" : `<small class="lia-asset-add-disabled-note">Neutral 에셋을 생성하고 ‘Neutral 기준 확정’을 완료해야 새 감정 에셋을 추가할 수 있습니다.</small>`}
+          </div>
+          <div class="lia-asset-add-zone lia-asset-transfer-zone">
+            <div class="lia-asset-add-actions">
+              <button id="dpg-asset-export-zip" class="btn-soft" type="button"${Object.keys(bundle.images || {}).length ? "" : " disabled"}>ZIP 내보내기</button>
+              <button id="dpg-asset-import-open" class="btn-soft" type="button">ZIP 붙여넣기/복원</button>
+            </div>
+            <input id="dpg-asset-import-zip" class="lia-visually-hidden" type="file" accept=".zip,application/zip">
+            <input id="dpg-asset-manual-upload" class="lia-visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif">
+            <small>내보내기는 현재 선택된 Persona의 감정 에셋 묶음 전체를 ZIP으로 저장합니다. ZIP 복원은 현재 선택된 Persona 타겟에 감정 에셋과 Visual Generation Lock을 복원합니다.</small>
+          </div>
         </main>
       </section>`;
   }
@@ -12833,9 +14041,13 @@ ${revisionText}`);
   function syncIllustrationProviderUi() {
     const provider = normalizeIllustrationProviderType(document.getElementById("dpg-img-provider")?.value || "wellspring-nai");
     const workflow = document.getElementById("dpg-img-workflow")?.closest("label");
+    const bindingProfile = document.getElementById("dpg-img-binding-profile")?.closest("label");
+    const bindingTools = document.querySelector(".lia-comfy-binding-tools");
     const request = document.getElementById("dpg-img-request-template")?.closest("label");
     const responsePath = document.getElementById("dpg-img-response-path")?.closest("label");
     if (workflow) workflow.style.display = provider === "comfyui-local" ? "grid" : "none";
+    if (bindingProfile) bindingProfile.style.display = provider === "comfyui-local" ? "grid" : "none";
+    if (bindingTools) bindingTools.style.display = provider === "comfyui-local" ? "grid" : "none";
     if (request) request.style.display = provider === "custom-json" ? "grid" : "none";
     if (responsePath) responsePath.style.display = provider === "custom-json" ? "grid" : "none";
     const endpoint = document.getElementById("dpg-img-endpoint");
@@ -12862,15 +14074,126 @@ ${revisionText}`);
       const freshTarget = resolvePersonaVisualTarget(freshCtx);
       setStatus(`감정 에셋 타겟을 '${freshTarget.personaName}'(${freshTarget.displaySource})로 변경했습니다.`, "ok");
     });
+    const assetPresetSelect = document.getElementById("dpg-asset-preset-select");
+    const assetPresetLoad = document.getElementById("dpg-asset-preset-load");
+    const assetPresetDelete = document.getElementById("dpg-asset-preset-delete");
+    const assetPresetName = document.getElementById("dpg-asset-preset-name");
+    const syncAssetPresetButtons = () => {
+      const id = String(assetPresetSelect?.value || "").trim();
+      preservedVisualAssetPresetId = id;
+      if (assetPresetLoad) assetPresetLoad.disabled = !id;
+      if (assetPresetDelete) assetPresetDelete.disabled = !id;
+    };
+    assetPresetSelect?.addEventListener("change", syncAssetPresetButtons);
+    assetPresetLoad?.addEventListener("click", async () => {
+      const id = String(assetPresetSelect?.value || "").trim();
+      const preset = normalizeVisualAssetPresetStore(preservedVisualAssetPresetStore || {}).items.find((item) => item.id === id);
+      if (!preset) { setStatus("불러올 감정 에셋 프리셋을 선택해 주세요.", "error"); return; }
+      try {
+        const applied = applyVisualAssetPreset(preset);
+        activeWorkspaceTab = "assets";
+        await refreshPreview({ skipCapture: true });
+        setStatus(`감정 에셋 프리셋 '${applied.name}'을 불러왔습니다. Neutral 이미지와 Visual Lock은 변경하지 않았습니다.`, "ok");
+      } catch (error) { setStatus(`감정 에셋 프리셋 불러오기 실패: ${error?.message || error}`, "error"); }
+    });
+    assetPresetDelete?.addEventListener("click", async () => {
+      const id = String(assetPresetSelect?.value || "").trim();
+      const preset = normalizeVisualAssetPresetStore(preservedVisualAssetPresetStore || {}).items.find((item) => item.id === id);
+      if (!preset) { setStatus("삭제할 감정 에셋 프리셋을 선택해 주세요.", "error"); return; }
+      const ok = typeof globalThis.confirm === "function" ? globalThis.confirm(`감정 에셋 프리셋 '${preset.name}'을 삭제할까요?`) : true;
+      if (!ok) return;
+      try {
+        await deleteVisualAssetPreset(id);
+        activeWorkspaceTab = "assets";
+        await refreshPreview({ skipCapture: true });
+        setStatus(`감정 에셋 프리셋 '${preset.name}'을 삭제했습니다.`, "ok");
+      } catch (error) { setStatus(`감정 에셋 프리셋 삭제 실패: ${error?.message || error}`, "error"); }
+    });
+    const saveCurrentAssetPreset = async () => {
+      const name = String(assetPresetName?.value || "").trim();
+      if (!name) { setStatus("저장할 감정 에셋 프리셋 이름을 입력해 주세요.", "error"); assetPresetName?.focus?.(); return; }
+      const existing = normalizeVisualAssetPresetStore(preservedVisualAssetPresetStore || {}).items.find((item) => String(item?.name || "").trim().toLocaleLowerCase("ko") === name.toLocaleLowerCase("ko"));
+      if (existing && typeof globalThis.confirm === "function" && !globalThis.confirm(`'${existing.name}' 프리셋이 이미 있습니다. 현재 설정으로 덮어쓸까요?`)) return;
+      const button = document.getElementById("dpg-asset-preset-save");
+      if (button) button.disabled = true;
+      try {
+        const result = await saveVisualAssetPreset(name);
+        if (assetPresetName) assetPresetName.value = "";
+        activeWorkspaceTab = "assets";
+        await refreshPreview({ skipCapture: true });
+        setStatus(`감정 에셋 프리셋 '${result.preset.name}'을 ${result.updated ? "갱신" : "저장"}했습니다.`, "ok");
+      } catch (error) { setStatus(`감정 에셋 프리셋 저장 실패: ${error?.message || error}`, "error"); }
+      finally { if (button && document.body?.contains(button)) button.disabled = false; }
+    };
+    document.getElementById("dpg-asset-preset-save")?.addEventListener("click", saveCurrentAssetPreset);
+    assetPresetName?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      event.preventDefault();
+      void saveCurrentAssetPreset();
+    });
+
     document.getElementById("dpg-asset-emotions")?.addEventListener("input", (event) => { preservedVisualEmotionText = String(event?.target?.value || ""); });
     document.getElementById("dpg-asset-style-notes")?.addEventListener("input", (event) => { preservedVisualStyleNotes = String(event?.target?.value || ""); });
     document.getElementById("dpg-asset-composition-preset")?.addEventListener("change", (event) => { preservedVisualCompositionPreset = normalizeVisualCompositionPreset(String(event?.target?.value || "standard_waist_up")); });
     document.getElementById("dpg-asset-composition-notes")?.addEventListener("input", (event) => { preservedVisualCompositionNotes = String(event?.target?.value || ""); });
+    const analyzeCurrentComfyWorkflow = () => {
+      const config = readIllustrationConfig();
+      if (config.provider !== "comfyui-local") throw new Error("Provider를 ComfyUI 로컬로 선택해 주세요.");
+      const resolved = resolveComfyWorkflowSource(config);
+      if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("ComfyUI API Workflow JSON을 먼저 입력해 주세요.");
+      const profile = analyzeComfyWorkflowBinding(resolved.workflow);
+      const profileText = JSON.stringify(profile, null, 2);
+      const area = document.getElementById("dpg-img-binding-profile");
+      if (area) area.value = profileText;
+      return profile;
+    };
+    document.getElementById("dpg-img-analyze-workflow")?.addEventListener("click", () => {
+      try {
+        const profile = analyzeCurrentComfyWorkflow();
+        const controlled = profile.bindings.filter((item) => item.controlled !== false).map((item) => item.slot).join(", ");
+        setStatus(`ComfyUI Workflow 자동 분석 완료 · Output ${profile.output.nodeId} · Sampler ${profile.sampler.nodeId} · 바인딩 ${controlled || "없음"}${profile.analysis?.warnings?.length ? ` · 경고 ${profile.analysis.warnings.length}개` : ""}`, profile.analysis?.warnings?.length ? "info" : "ok");
+      } catch (error) { setStatus(`ComfyUI Workflow 분석 실패: ${error?.message || error}`, "error"); }
+    });
+    document.getElementById("dpg-img-test-workflow")?.addEventListener("click", async () => {
+      const button = document.getElementById("dpg-img-test-workflow");
+      if (button) button.disabled = true;
+      try {
+        const profile = analyzeCurrentComfyWorkflow();
+        const config = readIllustrationConfig();
+        const base = comfyBaseUrl(config.endpoint);
+        const [statsRes, infoRes] = await Promise.all([
+          fetchWithTimeout(`${base}/system_stats`, { method: "GET", headers: { Accept: "application/json" } }, Math.min(15000, config.timeoutMs), "ComfyUI system_stats"),
+          fetchWithTimeout(`${base}/object_info`, { method: "GET", headers: { Accept: "application/json" } }, Math.min(20000, config.timeoutMs), "ComfyUI object_info"),
+        ]);
+        if (!statsRes.ok) throw new Error(`system_stats ${statsRes.status}`);
+        if (!infoRes.ok) throw new Error(`object_info ${infoRes.status}`);
+        const objectInfo = await infoRes.json();
+        const resolved = resolveComfyWorkflowSource(config);
+        const graph = comfyPromptGraph(resolved.workflow);
+        const types = [...new Set(Object.values(graph || {}).map((node) => String(node?.class_type || "")).filter(Boolean))];
+        const missing = types.filter((type) => !Object.prototype.hasOwnProperty.call(objectInfo || {}, type));
+        appendDebugLog("persona_visual", "comfy_preflight_complete", { nodeTypes: types.length, missingNodeTypes: missing, outputNodeId: profile.output.nodeId, samplerNodeId: profile.sampler.nodeId }, missing.length ? "warn" : "info");
+        if (missing.length) throw new Error(`현재 ComfyUI에 없는 노드 ${missing.length}종: ${missing.slice(0, 8).join(", ")}${missing.length > 8 ? " ..." : ""}`);
+        setStatus(`ComfyUI 연결 및 노드 검사 완료 · 노드 종류 ${types.length}종 확인 · Output ${profile.output.nodeId}`, "ok");
+      } catch (error) { setStatus(`ComfyUI 연결·노드 검사 실패: ${error?.message || error}`, "error"); }
+      finally { if (button && document.body?.contains(button)) button.disabled = false; }
+    });
     document.getElementById("dpg-save-img-config")?.addEventListener("click", async () => {
       try {
-        const saved = await writeStoredIllustrationConfig(readIllustrationConfig());
+        let pending = readIllustrationConfig();
+        if (pending.provider === "comfyui-local" && pending.workflowJson) {
+          const resolved = resolveComfyWorkflowSource(pending);
+          if (!looksLikeComfyWorkflowGraph(resolved.workflow)) throw new Error("ComfyUI API Workflow JSON 형식이 아닙니다.");
+          let profile = null;
+          try { profile = normalizeComfyBindingProfile(parseOptionalJsonObject(pending.workflowBindingJson), resolved.workflow); } catch (_) {}
+          if (!profile) profile = analyzeComfyWorkflowBinding(resolved.workflow);
+          pending = normalizeIllustrationConfig({ ...pending, workflowBindingJson: JSON.stringify(profile, null, 2) });
+          const area = document.getElementById("dpg-img-binding-profile");
+          if (area) area.value = pending.workflowBindingJson;
+        }
+        const saved = await writeStoredIllustrationConfig(pending);
         syncIllustrationProviderUi();
-        const comfyMode = saved.provider === "comfyui-local" && saved.workflowJson ? (findSoyaPromptParserBinding(parseOptionalJsonObject(saved.workflowJson)) ? " / Workflow: Soya 자동 호환" : " / Workflow: API JSON") : "";
+        const comfyMode = saved.provider === "comfyui-local" && saved.workflowJson ? " / Workflow: 범용 Binding Engine" : "";
         setStatus(`삽화 설정을 저장했습니다. Provider: ${saved.provider}${saved.model && !looksLikeComfyWorkflowText(saved.model) ? ` / Model: ${saved.model}` : ""}${comfyMode}`, "ok");
       } catch (error) {
         setStatus(`삽화 설정 저장 실패: ${error?.message || error}`, "error");
@@ -12928,6 +14251,166 @@ ${revisionText}`);
         if (button) button.disabled = false;
       }
     });
+    const customEmotionToggle = document.getElementById("dpg-asset-add-toggle");
+    const customEmotionForm = document.getElementById("dpg-asset-add-form");
+    const customEmotionInput = document.getElementById("dpg-asset-add-emotion");
+    const customEmotionCreate = document.getElementById("dpg-asset-add-create");
+    const customEmotionCancel = document.getElementById("dpg-asset-add-cancel");
+    const setCustomEmotionFormOpen = (open) => {
+      if (!customEmotionForm) return;
+      customEmotionForm.hidden = !open;
+      customEmotionToggle?.classList.toggle("active", open);
+      if (open) queueMicrotask(() => customEmotionInput?.focus?.());
+    };
+    customEmotionToggle?.addEventListener("click", () => {
+      if (customEmotionToggle.disabled) return;
+      setCustomEmotionFormOpen(Boolean(customEmotionForm?.hidden));
+    });
+    customEmotionCancel?.addEventListener("click", () => {
+      if (customEmotionInput) customEmotionInput.value = "";
+      setCustomEmotionFormOpen(false);
+    });
+    const createCustomEmotionAsset = async () => {
+      const rawEmotion = normalizeCustomVisualEmotionLabel(customEmotionInput?.value || "");
+      if (!rawEmotion) {
+        setStatus("추가할 감정을 입력해 주세요.", "error");
+        customEmotionInput?.focus?.();
+        return;
+      }
+      if (normalizeEmotionKey(rawEmotion) === "neutral") {
+        setStatus("Neutral은 Visual Master 전용입니다. 다른 감정 이름을 입력해 주세요.", "error");
+        customEmotionInput?.focus?.();
+        return;
+      }
+      customEmotionToggle && (customEmotionToggle.disabled = true);
+      if (customEmotionCreate) customEmotionCreate.disabled = true;
+      if (customEmotionCancel) customEmotionCancel.disabled = true;
+      activeWorkspaceTab = "assets";
+      try {
+        const freshCtx = { ...ctx, visualAssetStore: await readPersonaVisualAssetStore() };
+        const target = resolvePersonaVisualTarget(freshCtx);
+        const bundle = target.bundle || freshCtx.visualAssetStore?.sets?.[target.personaKey] || null;
+        const lock = normalizeVisualGenerationLock(bundle?.visualLock || null, { confirmed: true });
+        if (!bundle?.images?.neutral || !lock?.confirmed) {
+          throw new Error("Neutral 에셋을 생성하고 ‘Neutral 기준 확정’을 완료한 뒤 추가할 수 있습니다.");
+        }
+        const duplicate = Object.keys(bundle.images || {}).find((emotion) => normalizeEmotionKey(emotion) === normalizeEmotionKey(rawEmotion));
+        if (duplicate) throw new Error(`'${duplicate}' 감정 에셋이 이미 있습니다. 기존 카드의 재생성을 사용해 주세요.`);
+        const emotion = rememberCustomVisualEmotionLabel(rawEmotion);
+        setStatus(`${emotion} 사용자 감정 에셋을 Neutral 기준으로 생성하는 중...`, "info");
+        await generatePersonaVisualEmotion(freshCtx, emotion);
+        if (customEmotionInput) customEmotionInput.value = "";
+        await refreshPreview({ skipCapture: true });
+        setStatus(`${emotion} 감정 에셋을 추가했습니다. 확정된 Neutral 기준을 그대로 사용했습니다.`, "ok");
+      } catch (error) {
+        setStatus(`감정 에셋 추가 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (customEmotionToggle && document.body?.contains(customEmotionToggle)) customEmotionToggle.disabled = false;
+        if (customEmotionCreate && document.body?.contains(customEmotionCreate)) customEmotionCreate.disabled = false;
+        if (customEmotionCancel && document.body?.contains(customEmotionCancel)) customEmotionCancel.disabled = false;
+      }
+    };
+    customEmotionCreate?.addEventListener("click", createCustomEmotionAsset);
+    customEmotionInput?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.isComposing) return;
+      event.preventDefault();
+      void createCustomEmotionAsset();
+    });
+
+    document.getElementById("dpg-asset-export-zip")?.addEventListener("click", async () => {
+      const button = document.getElementById("dpg-asset-export-zip");
+      if (button) button.disabled = true;
+      activeWorkspaceTab = "assets";
+      try {
+        setStatus("감정 에셋 ZIP을 준비하는 중...", "info");
+        const freshCtx = { ...ctx, visualAssetStore: await readPersonaVisualAssetStore() };
+        const target = resolvePersonaVisualTarget(freshCtx);
+        const exported = await exportPersonaVisualAssetBundleZip(target);
+        const ok = downloadBinary(exported.fileName, exported.bytes, "application/zip");
+        if (!ok) throw new Error("파일 저장 API를 사용할 수 없습니다.");
+        setStatus(`${target.personaName} 감정 에셋 ${exported.assetCount}개를 ZIP으로 내보냈습니다.`, "ok");
+      } catch (error) {
+        appendDebugLog("persona_visual", "asset_bundle_export_failed", {
+          selectedTarget: currentVisualTargetSelectionValue(),
+          error: errorForLog(error),
+        }, "error");
+        setStatus(`감정 에셋 ZIP 내보내기 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (button && document.body?.contains(button)) button.disabled = false;
+      }
+    });
+
+    const importZipInput = document.getElementById("dpg-asset-import-zip");
+    document.getElementById("dpg-asset-import-open")?.addEventListener("click", () => {
+      if (!importZipInput) return;
+      importZipInput.value = "";
+      importZipInput.click();
+    });
+    importZipInput?.addEventListener("change", async () => {
+      const file = importZipInput.files?.[0];
+      if (!file) return;
+      activeWorkspaceTab = "assets";
+      const openButton = document.getElementById("dpg-asset-import-open");
+      if (openButton) openButton.disabled = true;
+      try {
+        const freshCtx = { ...ctx, visualAssetStore: await readPersonaVisualAssetStore() };
+        const target = resolvePersonaVisualTarget(freshCtx);
+        const currentBundle = normalizeVisualAssetSet(target.bundle || {}, target.personaKey);
+        const currentCount = Object.keys(currentBundle.images || {}).length;
+        const confirmed = typeof globalThis.confirm === "function"
+          ? globalThis.confirm(`ZIP 복원을 시작할까요?
+
+현재 타겟: ${target.personaName}
+기존 감정 에셋 ${currentCount}개와 Visual Lock 정보가 있으면 가져온 ZIP 내용으로 덮어씁니다.`)
+          : true;
+        if (!confirmed) {
+          setStatus("ZIP 복원을 취소했습니다.", "info");
+          return;
+        }
+        setStatus("감정 에셋 ZIP을 복원하는 중...", "info");
+        const restored = await importPersonaVisualAssetBundleZip(target, file);
+        await refreshPreview({ skipCapture: true });
+        setStatus(`${target.personaName} 감정 에셋 ${restored.assetCount}개를 ZIP에서 복원했습니다.`, "ok");
+      } catch (error) {
+        setStatus(`감정 에셋 ZIP 복원 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (openButton && document.body?.contains(openButton)) openButton.disabled = false;
+        if (importZipInput) importZipInput.value = "";
+      }
+    });
+
+    const manualAssetInput = document.getElementById("dpg-asset-manual-upload");
+    document.querySelectorAll("[data-visual-asset-manual-upload]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const emotion = String(button.getAttribute("data-visual-asset-manual-upload") || "").trim();
+        if (!emotion || !manualAssetInput) return;
+        manualAssetInput.dataset.emotion = emotion;
+        manualAssetInput.value = "";
+        manualAssetInput.click();
+      });
+    });
+    manualAssetInput?.addEventListener("change", async () => {
+      const file = manualAssetInput.files?.[0];
+      const emotion = String(manualAssetInput.dataset.emotion || "").trim();
+      if (!file || !emotion) return;
+      activeWorkspaceTab = "assets";
+      try {
+        const freshCtx = { ...ctx, visualAssetStore: await readPersonaVisualAssetStore() };
+        const target = resolvePersonaVisualTarget(freshCtx);
+        setStatus(`${emotion} 감정 에셋 이미지를 업로드하는 중...`, "info");
+        await importPersonaVisualAssetImage(target, emotion, file);
+        await refreshPreview({ skipCapture: true });
+        setStatus(`${target.personaName}의 ${emotion} 감정 에셋 이미지를 수동으로 붙여넣었습니다.`, "ok");
+      } catch (error) {
+        setStatus(`수동 에셋 업로드 실패: ${error?.message || error}`, "error");
+      } finally {
+        if (manualAssetInput) {
+          manualAssetInput.value = "";
+          delete manualAssetInput.dataset.emotion;
+        }
+      }
+    });
+
     document.getElementById("dpg-asset-discard-bundle")?.addEventListener("click", async () => {
       const button = document.getElementById("dpg-asset-discard-bundle");
       if (button) button.disabled = true;
@@ -14636,6 +16119,8 @@ ${revisionText}`);
         .lia-provider-section-head small { font-size: 10px; line-height: 1.45; color: var(--lia-muted); }
         .lia-provider-service > summary { color: #dbeafe; }
         .lia-provider-json { min-height: 100px !important; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important; font-size: 9px !important; }
+        .lia-comfy-binding-json { min-height: 190px !important; }
+        .lia-comfy-binding-tools { gap:8px; }
         .lia-provider-stream-check { position: relative; display: flex; gap: 9px; padding: 10px; border: 1px solid var(--lia-line); border-radius: 11px; background: rgba(255,255,255,.02); }
         .lia-provider-stream-check input { width: auto; accent-color: var(--lia-accent); }
         .lia-provider-stream-check span { display: grid; gap: 3px; }
@@ -15115,8 +16600,29 @@ ${revisionText}`);
         .lia-asset-hero { margin-bottom: 16px; }
         .lia-asset-config-panel, .lia-asset-gallery-panel { min-height: 200px; }
         .lia-asset-batch-actions { display:grid; gap:8px; margin-top: 8px; }
+        .lia-asset-preset-box { display:grid; gap:9px; padding:12px; border:1px solid rgba(138,168,255,.22); border-radius:14px; background:rgba(138,168,255,.035); }
+        .lia-asset-preset-head { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; }
+        .lia-asset-preset-head > div { display:grid; gap:3px; }
+        .lia-asset-preset-head strong { font-size:11px; color:var(--lia-text); }
+        .lia-asset-preset-head small { color:var(--lia-muted); font-size:8px; text-align:right; }
+        .lia-asset-preset-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
+        .lia-asset-preset-actions button { min-height:36px; }
         .lia-asset-gallery { display:grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap:12px; }
         .lia-asset-card { display:grid; gap:10px; padding:12px; border:1px solid var(--lia-line); border-radius:16px; background: rgba(255,255,255,.03); }
+        .lia-asset-card-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+        .lia-asset-card-empty { border-style:dashed; background: rgba(255,255,255,.015); }
+        .lia-asset-upload-inline { width:32px; height:32px; border:none; border-radius:999px; background:rgba(138,168,255,.16); color:#dce5ff; font-size:18px; font-weight:900; cursor:pointer; display:grid; place-items:center; }
+        .lia-asset-upload-inline:hover { background:rgba(138,168,255,.26); }
+        .lia-asset-add-zone { display:grid; gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid var(--lia-line); }
+        .lia-asset-add-button { width:100%; min-height:48px; border-style:dashed; font-size:12px; font-weight:900; letter-spacing:.01em; }
+        .lia-asset-add-button.active { border-color:rgba(138,168,255,.45); background:rgba(138,168,255,.07); }
+        .lia-asset-add-form { display:grid; gap:10px; padding:12px; border:1px solid rgba(138,168,255,.24); border-radius:14px; background:rgba(138,168,255,.045); }
+        .lia-asset-add-form[hidden] { display:none !important; }
+        .lia-asset-transfer-zone { margin-top:12px; }
+        .lia-asset-add-form input { min-height:40px; }
+        .lia-asset-add-actions { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); gap:8px; }
+        .lia-asset-add-actions button { min-height:38px; }
+        .lia-asset-add-form > small, .lia-asset-add-disabled-note { color:var(--lia-muted); font-size:9px; line-height:1.5; }
         .lia-asset-prompt-details { border:1px solid rgba(255,255,255,.08); border-radius:12px; background: rgba(255,255,255,.02); overflow:hidden; }
         .lia-asset-prompt-details > summary { cursor:pointer; list-style:none; padding:10px 12px; font-weight:700; color: var(--lia-text); }
         .lia-asset-prompt-details > summary::-webkit-details-marker { display:none; }
@@ -15124,6 +16630,7 @@ ${revisionText}`);
         .lia-asset-prompt-editor { display:grid; gap:10px; padding:12px; }
         .lia-asset-prompt-editor textarea { min-height: 120px; }
         .lia-asset-thumb { aspect-ratio: 3 / 4; border-radius:14px; overflow:hidden; border:1px solid var(--lia-line); background:#0b111a; display:grid; place-items:center; color:var(--lia-muted); font-size:11px; }
+        .lia-asset-thumb-empty { background:rgba(255,255,255,.025); border-style:dashed; text-align:center; padding:12px; }
         .lia-asset-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
         .lia-asset-meta { display:grid; gap:4px; }
         .lia-asset-meta-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -15289,6 +16796,7 @@ ${revisionText}`);
   }
 
   try { await readLogStore(); } catch (_) {}
+  try { preservedVisualAssetPresetStore = await readVisualAssetPresetStore(); } catch (_) { preservedVisualAssetPresetStore = normalizeVisualAssetPresetStore(); }
   appendOperationLog("plugin_start", `${PLUGIN_DISPLAY_NAME} v${PLUGIN_VERSION} 시작`, {}, "info");
   appendDebugLog("lifecycle", "plugin_start", { version: PLUGIN_VERSION }, "info");
   registeredSettingHandle = await api.registerSetting?.(PLUGIN_DISPLAY_NAME, openUI, PLUGIN_ICON, "html");
