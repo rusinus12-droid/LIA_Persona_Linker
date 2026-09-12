@@ -1,18 +1,38 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.26.42
+//@version 0.26.68
+/* v0.26.66 / Pocket Studio: light responsive home, grouped bottom navigation, preserved persona and storage actions. */
+/* v0.26.62 requires semantic Persona name/prompt readback and rejects explicit host write failures before committing Live Persona progress. */
+/* Core-quality patch: Lore Reranker v2 replaces flat substring weighting with exact-anchor + rare-term BM25F-style scoring and splits protected lore into hard constraints (always retained) versus soft always/constant lore (budgeted inside Top-K). */
+/* v0.26.61 removes repeated full-transcript hashing from committed-output capture, narrows source revalidation to the pending batch, caches stable negative/empty states, and skips Persona Proof/inheritance work for ordinary chats without a dynamic or Live Persona binding. */
+/* v0.26.60 derives World Lore Compute routing from the current scope's Storage mode and combines Storage and Compute controls into one fail-open server panel. */
+/* v0.26.59 adopts Storage SDK 1.8.13 paged key discovery, bounded batch reads, oversized-record fallback, and the 4 MiB interactive value guard. Persona DB, Live Persona, assets, provider calls, World Lore ranking, and RE:TRACE ownership are unchanged. */
+/* v0.26.58 removes empty Live Persona indexes, readback-verifies shard deletion and Persona Proof writes, and rolls shard mutations back when the owner index cannot be durably committed. RE:TRACE now distinguishes shard-only content from proof/index-only metadata and only the latter can be cleaned after two stable scans plus authenticated Owner revalidation. */
+/* v0.26.57 makes RE:TRACE discovery a storage-free fast path: capability and read-only inspection responses report the already-cached Storage status instead of waiting on durable scope-mode resolution. Persona ownership, provider calls, assets, Live Persona binding and storage-mode mutations are unchanged. */
+/* v0.26.56 exposes the plugin-global Compute mode in the Server GUI through the shared Compute panel. The panel requires no user token or pairing key, keeps local as the zero-network fallback, and mounts independently from Storage connection diagnostics. */
+/* v0.26.55 adopts the Librarian System product name and Storage SDK 1.8.11 / Compute SDK 0.3.2 labels without changing Persona ownership, provider calls, assets, local fallback, capture, or durable storage behavior. */
+/* v0.26.54 makes prefer_server delegate the current World Lore rerank through a bounded interactive Compute call. LIA keeps the complete local reranker and remains authoritative; local is zero-network, shadow adopts local only, and timeout, server failure, or stale character/chat/persona/lore binding falls back locally. Compute bootstrap remains automatic and Storage-independent with no token or pairing input. */
+/* v0.26.52 is a release-metadata synchronization update over v0.26.51. Live Persona, shared-store recovery, capture, provider, visual-asset, RE:TRACE peer protocol, Librarian System routing and persisted data contracts are unchanged. No Persona regeneration or data migration is required. */
+/* v0.26.51 opts LIA-owned non-credential shared durable stores into Librarian System scope recovery. Result Vault, World Blueprint, legacy Live Persona, visual-asset catalog/presets and chunked asset backups now participate in mirror synchronization, server-to-pluginStorage restore, server tombstones, physical readback, transactional rollback and owner semantic validation. Provider secrets, illustration credentials/config, current-scope Live Persona semantics, capture and RE:TRACE contracts are unchanged. */
+/* v0.26.50 assigns stable official UI ids to the main setting and hamburger button and prefers unregisterUIPart() during unload, with existing handle/legacy removal fallbacks retained for older/fork hosts. Live Persona, Persona Proof, provider, visual-asset, storage and capture behavior are unchanged. */
+/* v0.26.49 uses the official api.onUnload lifecycle first (legacy/fork event fallback only), replaces deprecated startup api.log with console.log, and adds dispatch-health failover for hosts that register addRisuChatListener without ever firing it. The next narrative beforeRequest after a main afterRequest is a deterministic proof point: if no official output callback occurred, LIA removes the silent listener, promotes exactly one legacy backend, and immediately reconciles Live Persona from the original target chat. */
+/* v0.26.48 adopts RisuAI 2026.8.240 committed-output capture for Live Persona Sync: the official output event supplies the exact chat/message slot, logical U+A revisions are upserted, five-turn LLM results are source-revalidated immediately before Persona mutation, and superseded Auto Continue/IGP/reroll work is discarded then requeued. Pre-2026.8.240 RisuAI and fork builds retain one mutually-exclusive legacy backend (script output, otherwise afterRequest live-chat reconcile). Persona Proof, Emotion Assets, ledger rollback, Librarian System storage, and RE:TRACE contracts remain unchanged. */
+/* v0.26.47 adopts Storage SDK v1.8.10 transactional mode preflight and authoritative mirror tombstone handling while retaining scoped index, binding digest and strict JSON restore validation. */
+/* v0.26.45 adopts Storage SDK v1.8.8: the active plugin-only scope is a strict zero-network boundary even when other scopes use the server, shared and foreign-scope keys stay local, and applying plugin-only does not reconnect. */
+/* v0.26.44 adopts Storage SDK v1.8.7: server-to-pluginStorage restore requires verified candidate coverage and readback, failed recovery remains server-only under a durable recovery guard, and terminal work results stay visible. */
+/* v0.26.43 adopts Storage SDK v1.8.6: timed-out server requests are aborted, failed data routes open the shared offline circuit, background resources are disposed on unload, and hot-reload globals are released safely. */
 /* v0.26.42 pre-resolves global/shared/explicit-scope storage keys, bounds current-character/chat host calls so owner inspection cannot hang indefinitely, and keeps current-scope-only bindings on the verified scope path. */
-/* v0.26.39 removes idle bridge polling that could flood PocketRisu/WebView message handlers: Live Persona Sync is output-driven with a cached enabled-binding fast gate, Persona Proof badge refresh is event-driven and diff-only, afterRequest proof exits before chat/context reads when no proof request is pending, and a singleton runtime fence disposes stale plugin instances after hot reload. Live Persona analysis cadence, Memory Suite keys/schemas, RE:TRACE handoff, Persona generation, and provider behavior are unchanged. */
+/* v0.26.39 removes idle bridge polling that could flood PocketRisu/WebView message handlers: Live Persona Sync is output-driven with a cached enabled-binding fast gate, Persona Proof badge refresh is event-driven and diff-only, afterRequest proof exits before chat/context reads when no proof request is pending, and a singleton runtime fence disposes stale plugin instances after hot reload. Live Persona analysis cadence, Librarian System keys/schemas, RE:TRACE handoff, Persona generation, and provider behavior are unchanged. */
 /* v0.26.37 upgrades Live Persona delta-ledger turn identity to a backward-compatible stable-message scheme: new ledgers prefer msg.chatId/other RisuAI IDs plus content digests, while existing index+text fingerprints remain valid under the legacy schema. Scope/storage keys are unchanged. */
-/* v0.26.36 adds Memory Suite server diagnostics to LIA debug exports. The async debug snapshot preloads privacy-scrubbed server events, namespace integrity, protocol/version and offline state so the existing gesture-safe synchronous download/copy path can include them without exposing Persona assets, raw keys or credentials. */
-/* v0.26.35 makes Memory Suite storage mode independent for every LIA chat scope. Live Persona shards plus scoped index/proof projections follow the selected scope route, new scopes default to pluginStorage, global vault/assets remain conservatively mirrored, and the real RisuAI Persona database remains outside server routing. */
-/* v0.26.34 adds shared Memory Suite background synchronization telemetry to the server-connection workspace page. Large Vault/Blueprint/Live Persona/visual-asset storage moves now expose phase/count/bytes/timing/retry diagnostics and continue after the panel closes; the actual RisuAI Persona database and credentials remain outside server storage. */
+/* v0.26.36 adds Librarian System server diagnostics to LIA debug exports. The async debug snapshot preloads privacy-scrubbed server events, namespace integrity, protocol/version and offline state so the existing gesture-safe synchronous download/copy path can include them without exposing Persona assets, raw keys or credentials. */
+/* v0.26.35 makes Librarian System storage mode independent for every LIA chat scope. Live Persona shards plus scoped index/proof projections follow the selected scope route, new scopes default to pluginStorage, global vault/assets remain conservatively mirrored, and the real RisuAI Persona database remains outside server routing. */
+/* v0.26.34 adds shared Librarian System background synchronization telemetry to the server-connection workspace page. Large Vault/Blueprint/Live Persona/visual-asset storage moves now expose phase/count/bytes/timing/retry diagnostics and continue after the panel closes; the actual RisuAI Persona database and credentials remain outside server storage. */
 /* v0.26.33 adds a dedicated 서버 연결 workspace page with storage-mode selection, loopback URL editing, connection testing, server/protocol status, synchronization, recovery, and guarded pluginStorage deletion. Persona generation, Live Persona, visual assets, and native Persona database behavior are unchanged. */
 /* v0.26.32 adds the RE:TRACE server-scope deletion owner proof for Live Persona, Blueprint, Vault and asset metadata. Active server-scope deletion restores and verifies the scoped owner records and switches durably to plugin_only without changing the actual RisuAI Persona database. */
-/* v0.26.32 binds RE:TRACE Live Persona handoff state to Memory Suite storage readiness while keeping the actual RisuAI Persona object in the native Persona database. */
-/* v0.26.30 adds three Memory Suite storage modes with plugin-only as the default, live pluginStorage+server mirroring, server-only storage, verified server-to-pluginStorage recovery, and guarded deletion of server-backed pluginStorage data only after server integrity/coverage proof. Mirror-mode deletion switches automatically to server-only; actual RisuAI Persona objects and credentials remain outside server deletion. */
-/* v0.26.29 moves LIA Result Vault, World Blueprint, Live Persona binding/index shards, request proof, logs, visual-asset metadata/presets and chunked visual blobs to the shared Memory Suite server. Actual RisuAI Persona objects and provider/illustration credentials remain in RisuAI/local storage. Existing pluginStorage is retained as a lazy migration source. */
+/* v0.26.32 binds RE:TRACE Live Persona handoff state to Librarian System storage readiness while keeping the actual RisuAI Persona object in the native Persona database. */
+/* v0.26.30 adds three Librarian System storage modes with plugin-only as the default, live pluginStorage+server mirroring, server-only storage, verified server-to-pluginStorage recovery, and guarded deletion of server-backed pluginStorage data only after server integrity/coverage proof. Mirror-mode deletion switches automatically to server-only; actual RisuAI Persona objects and credentials remain outside server deletion. */
+/* v0.26.29 moves LIA Result Vault, World Blueprint, Live Persona binding/index shards, request proof, logs, visual-asset metadata/presets and chunked visual blobs to the shared Librarian System server. Actual RisuAI Persona objects and provider/illustration credentials remain in RisuAI/local storage. Existing pluginStorage is retained as a lazy migration source. */
 /* v0.26.28 hardens Gemini Live Persona Sync: all Gemini 2.5 variants use thinkingBudget rather than thinkingLevel, 2.0 structured-output schemas gain propertyOrdering, and generic HTTP 400 INVALID_ARGUMENT responses retry safely by disabling incompatible reasoning first and then dropping only the strict response schema while preserving JSON mode. */
 /* v0.26.27 fixes narrow-phone navigation clipping: the six-item mobile sidebar stays on one row, scrolls horizontally by touch, and hides the scrollbar without shrinking or dropping any workspace tab. */
 /* v0.26.26 makes WebRisu credential persistence update-safe: the LLM provider secret is mirrored into both device-local storage and a verified pluginStorage backup, startup reconciles whichever copy survived back into the missing backend, explicit key deletion clears both copies without resurrection, the ordinary LLM config remains secret-free when durable backup succeeds, and the illustration-provider config (whose API key already lives in pluginStorage) now receives durable readback verification. */
@@ -23,7 +43,7 @@
 //@update-url https://raw.githubusercontent.com/rusinus12-droid/LIA_Persona_Linker/refs/heads/main/LIA_Persona_Linker.js
 //@allowed-ipc flashback_hayaku_bridge
 //@arg memory_suite_server_mode string Legacy 0.2.6 migration only; current scope modes are stored in the routing registry
-//@arg memory_suite_server_url string Memory Suite Server URL; blank uses http://127.0.0.1:47630
+//@arg memory_suite_server_url string Librarian System Server URL; blank uses http://127.0.0.1:47630
 //@arg max_lore_entries int Legacy lore breadth base; v0.22.15 keeps the protected + reranked Top-K lore pipeline
 //@arg max_lore_chars int Maximum characters copied from each lorebook entry as generation context
 
@@ -90,7 +110,9 @@
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-const PLUGIN_VERSION = "0.26.42";
+const PLUGIN_VERSION = "0.26.68";
+  const LIA_SETTING_UI_ID = "lia-persona-linker-setting";
+  const LIA_BUTTON_UI_ID = "lia-persona-linker-button";
   const PERSONA_PROOF_VERSION = 1;
   const PERSONA_PROOF_MAX_SCOPES = 96;
   const LIVE_PERSONA_NOTE_MARKER = "Managed by LIA Live Persona Sync.";
@@ -101,6 +123,17 @@ const PLUGIN_VERSION = "0.26.42";
   const LIVE_SYNC_LEDGER_MAX = 80;
   const LIVE_SYNC_STATE_MAX = 24;
   const LIVE_SYNC_CORE_MAX = 14;
+  const LIVE_SYNC_CAPTURE_BACKENDS = Object.freeze({
+    NONE: "none",
+    CHAT_OUTPUT_V3: "chat_output_v3",
+    SCRIPT_OUTPUT_LEGACY: "script_output_legacy",
+    AFTER_REQUEST_RECONCILE: "after_request_reconcile",
+  });
+  const LIVE_SYNC_OUTPUT_REVISION_MAX = 256;
+  const LIVE_SYNC_OUTPUT_COALESCE_MS = 650;
+  const LIVE_SYNC_REQUEUE_DELAY_MS = 90;
+  const LIVE_SYNC_LAST_REQUEST_TARGET_TTL_MS = 180000;
+  const LIVE_SYNC_SOURCE_SUPERSEDED_CODE = "LIA_LIVE_SYNC_SOURCE_SUPERSEDED";
   const LIVE_PERSONA_DISPLAY_NAME_VERSION = 2;
   const PERSONA_BINDING_MANAGER_VERSION = 6;
   const RETRACE_PLUGIN_ID = "flashback_hayaku_bridge";
@@ -113,7 +146,9 @@ const PLUGIN_VERSION = "0.26.42";
   const LIA_SESSION_HANDOFF_CONTRACT = "lia.live_persona_handoff_immutable_source.v1";
   const MAX_RESULT_VAULT_ITEMS = 60;
   const MAX_WORLD_BLUEPRINT_ITEMS = 24;
-  const LORE_RERANKER_VERSION = "lia_lore_reranker_v1";
+  const LORE_RERANKER_VERSION = "lia_lore_reranker_v2";
+  const LIA_WORLD_LORE_COMPUTE_OPERATION = "lia.world-lore-rerank.v2";
+  const LIA_WORLD_LORE_COMPUTE_FINGERPRINT = "cbd91cc90d01c8fc052669390badab3d0c2c7a52c4b6c314ac2ca61716fc7a75";
   const WORLD_LORE_TOP_K = 16;
   const PERSONA_LORE_TOP_K = 8;
   const CHARACTER_ENTITY_LORE_TOP_K = 12;
@@ -143,7 +178,7 @@ const PLUGIN_VERSION = "0.26.42";
   let preservedTranslationLanguage = "ko";
   let preservedOutputPane = "persona";
   let preservedResultVaultId = "";
-  let activeWorkspaceTab = "generate";
+  let activeWorkspaceTab = "home";
   let preservedWorldDrawerOpen = false;
   let preservedSidebarCollapsed = false;
   let preservedPersonaPanelOpen = false;
@@ -174,11 +209,25 @@ const PLUGIN_VERSION = "0.26.42";
   let cachedLivePersonaStore = null;
   let cachedLivePersonaStoreComplete = false;
   let livePersonaStorePromise = null;
+  let cachedIllustrationConfig = null;
+  let cachedPersonaVisualAssetStoreEmpty = null;
   const liveSyncInFlightScopes = new Set();
+  const liveSyncRequeueByScope = new Map();
+  const liveSyncOutputTurnRevisions = new Map();
+  const liveSyncScheduledChecks = new Map();
   const livePersonaForkInFlight = new Map();
   let personaDatabaseMutationQueue = Promise.resolve();
   let liveSyncOutputListener = null;
-  let liveSyncOutputDebounce = null;
+  let liveSyncLegacyOutputHandler = null;
+  let liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.NONE;
+  let liveSyncCaptureFallbackReason = "";
+  let liveSyncCaptureObservedRuns = 0;
+  let liveSyncCaptureLastEventAt = 0;
+  let liveSyncCaptureHealthPending = null;
+  let liveSyncCaptureHealthChecks = 0;
+  let liveSyncCaptureSilentFailovers = 0;
+  let liveSyncLastRequestTarget = null;
+  let liveSyncLastOutputCapture = null;
   let cachedPersonaProofStore = null;
   let personaProofStorePromise = null;
   let personaProofBeforeReplacer = null;
@@ -764,7 +813,7 @@ const PLUGIN_VERSION = "0.26.42";
     try { runtimeInfo = await api.getRuntimeInfo?.(); } catch (_) {}
     try { runtimeCtx = await getLiveRuntimeContext(); db = runtimeCtx?.db || null; } catch (_) {}
     try { if (runtimeCtx) liveBinding = await readLivePersonaBindingForContext(runtimeCtx); } catch (_) {}
-    try { if (runtimeCtx) proof = await readPersonaProofForScope(livePersonaScopeKey(runtimeCtx)); } catch (_) {}
+    try { if (runtimeCtx) proof = await readPersonaProofForContext(runtimeCtx); } catch (_) {}
     const selected = selectedPersonaSnapshotFromDb(db || {});
     const boundId = String(runtimeCtx?.chat?.bindedPersona || "").trim();
     const boundPersona = asArray(db?.personas).find((item) => String(item?.id || "").trim() === boundId) || null;
@@ -787,6 +836,7 @@ const PLUGIN_VERSION = "0.26.42";
       },
       liveBinding,
       livePersonaStorage: { mode: 'scope_sharded_v2', indexKey: LIVE_PERSONA_INDEX_STORAGE_KEY },
+      liveSyncCapture: liveSyncCaptureBackendSnapshot(),
       requestProof: proof,
       provider: {
         provider: cfg.provider,
@@ -1024,11 +1074,232 @@ const PLUGIN_VERSION = "0.26.42";
     return Math.min(max, Math.max(min, Math.floor(num)));
   }
 
+  let loreLimitSaveInFlight = false;
+  async function saveLoreCharacterLimit(value) {
+    const next = Number(value);
+    if (!Number.isInteger(next) || next < 240 || next > 3000) throw new Error('240~3000 사이의 정수를 입력해 주세요.');
+    if (loreLimitSaveInFlight) throw new Error('자료 길이 설정을 저장 중입니다.');
+    const read = api.getArgument?.bind(api);
+    const write = (api.setArgument || api.setArg)?.bind(api);
+    if (!read || !write) throw new Error('호스트의 ARG 읽기·쓰기 API를 사용할 수 없습니다.');
+    loreLimitSaveInFlight = true;
+    try {
+      const before = await read('max_lore_chars');
+      try {
+        if (await write('max_lore_chars', String(next)) === false) throw new Error('ARG 저장이 거절되었습니다.');
+        if (String(await read('max_lore_chars')) !== String(next)) throw new Error('ARG 저장값 재읽기가 일치하지 않습니다.');
+      } catch (error) {
+        try {
+          await write('max_lore_chars', before ?? '');
+          if (String((await read('max_lore_chars')) ?? '') !== String(before ?? '')) throw new Error('rollback_readback_mismatch');
+        } catch (rollbackError) {
+          const failure = new Error('저장 실패 후 이전 값 복구도 확인하지 못했습니다. ARG 값을 확인해 주세요.');
+          failure.code = 'LIA_LORE_LIMIT_ROLLBACK_INCOMPLETE';
+          throw failure;
+        }
+        throw error;
+      }
+      return next;
+    } finally { loreLimitSaveInFlight = false; }
+  }
+  function bindLoreLimitControl() {
+    const button = document.getElementById('dpg-save-lore-limit');
+    if (!button || button.dataset.bound === 'true') return;
+    button.dataset.bound = 'true';
+    button.addEventListener('click', async () => {
+      const input = document.getElementById('dpg-max-lore-chars');
+      const status = document.getElementById('dpg-lore-limit-status');
+      button.disabled = true;
+      try {
+        const value = await saveLoreCharacterLimit(input.value);
+        input.value = String(value);
+        status.textContent = '저장값 재확인 완료: ' + value + '자 · 다음 자료 수집부터 적용됩니다.';
+      } catch (error) { status.textContent = String(error?.message || error); }
+      finally { button.disabled = false; }
+    });
+  }
+
   function getRuntimeApi() {
     return resolveRisuApi() || api || null;
   }
 
-/* MEMORY SUITE STORAGE SDK v1.8.5
+/* LIBRARIAN HOST LINEAGE SDK v1.0.0
+ * Read-only RisuAI 2026.8.250 native-branch evidence, not a memory store.
+ * Authority remains with each owner's source digest, worldline and commit gate.
+ */
+function createMemorySuiteHostLineage() {
+  'use strict';
+  const schema = 'librarian.host_lineage.v1';
+  const str = value => value == null ? '' : String(value);
+  const object = value => value && typeof value === 'object' ? value : {};
+  const unwrap = value => object(value?.msg || value);
+  const messages = chat => Array.isArray(chat?.message) ? chat.message : Array.isArray(chat?.messages) ? chat.messages : [];
+  const chatId = chat => str(chat?.id || chat?.chatId || '');
+  const characterId = character => str(character?.chaId || character?.id || character?.characterId || '');
+  const role = value => {
+    const item = unwrap(value), r = str(item.role || item.type || '').toLowerCase();
+    return ['user', 'human', 'player'].includes(r) ? 'user'
+      : ['char', 'assistant', 'character', 'bot', 'ai', 'model'].includes(r) ? 'assistant' : r;
+  };
+  const body = value => {
+    const item = unwrap(value), data = item.data ?? item.content ?? item.text ?? '';
+    return typeof data === 'string' ? data : JSON.stringify(data);
+  };
+  // These are source facts, not UI position, a title heuristic, or a single ID.
+  const descriptor = value => {
+    const item = unwrap(value);
+    return [role(item), str(item.chatId || item.id || ''), body(item), item.disabled === true,
+      item.isComment === true, str(item.saying || '')];
+  };
+  const same = (a, b) => {
+    const x = descriptor(a), y = descriptor(b);
+    return x.every((v, i) => v === y[i]);
+  };
+  const countPairs = list => {
+    let pending = false, complete = false, total = 0;
+    for (const raw of list) {
+      const item = unwrap(raw);
+      if (item.disabled === true || item.isComment === true || !body(item).trim()) continue;
+      const r = role(item);
+      if (r === 'user') { if (complete) total += 1; pending = true; complete = false; }
+      else if (r === 'assistant' && pending) complete = true;
+    }
+    return total + (complete ? 1 : 0);
+  };
+  const fingerprint = list => {
+    // Diagnostic fingerprint only: eligibility is decided by exact comparisons.
+    let a = 0x811c9dc5, b = 0x9e3779b9;
+    for (const item of list) {
+      const text = JSON.stringify(descriptor(item)) + '\u0000';
+      for (let i = 0; i < text.length; i += 1) {
+        a = Math.imul(a ^ text.charCodeAt(i), 0x01000193) >>> 0;
+        b = Math.imul(b ^ text.charCodeAt(i), 0x85ebca6b) >>> 0;
+      }
+    }
+    return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
+  };
+  const prefixRevision = (chat, completedPairs) => {
+    const rows = messages(chat), wanted = Math.max(0, Number(completedPairs) || 0);
+    if (!wanted) return fingerprint([]);
+    let pending = false, complete = false, count = 0, end = 0;
+    for (let i = 0; i < rows.length; i += 1) {
+      const item = unwrap(rows[i]);
+      if (item.disabled === true || item.isComment === true || !body(item).trim()) continue;
+      const r = role(item);
+      if (r === 'user') {
+        if (complete) { count += 1; if (count >= wanted) break; }
+        pending = true; complete = false;
+      } else if (r === 'assistant' && pending) { complete = true; end = i + 1; }
+    }
+    return fingerprint(rows.slice(0, end));
+  };
+  const marker = chat => {
+    const rows = messages(chat);
+    let found = null;
+    for (let i = 0; i < rows.length; i += 1) {
+      const item = unwrap(rows[i]), text = body(item);
+      // A quoted marker in ordinary RP dialogue must never establish lineage.
+      if (item.isComment !== true || item.disabled !== true || role(item) !== 'assistant'
+        || !text.startsWith('{{specialcomment::branchedfrom::')) continue;
+      found = { present: true, valid: false, markerIndex: i, parentChatId: '', parentName: '', forkMessageId: '' };
+      if (!text.endsWith('::}}')) continue;
+      const fields = text.slice('{{specialcomment::branchedfrom::'.length, -'::}}'.length).split('::');
+      if (fields.length < 3) continue;
+      const parentChatId = fields.shift(), forkMessageId = fields.pop();
+      // Names may themselves contain "::". The parent and final fork ID are fixed fields.
+      const parentName = fields.join('::');
+      found = { ...found, parentChatId, parentName, forkMessageId,
+        valid: !!parentChatId && !!forkMessageId && !['undefined', 'null'].includes(forkMessageId) };
+    }
+    return found || { present: false, valid: false, markerIndex: -1, parentChatId: '', parentName: '', forkMessageId: '' };
+  };
+  const prefix = (parent, child, limit = messages(child).length) => {
+    const left = messages(parent), right = messages(child);
+    const end = Math.min(left.length, right.length, Math.max(0, limit));
+    let common = 0;
+    while (common < end && same(left[common], right[common])) common += 1;
+    const rows = right.slice(0, common);
+    return { commonPrefixMessages: common, commonPrefixPairs: countPairs(rows), prefixDigest: fingerprint(rows) };
+  };
+  const inspect = (characterValue, chatValue) => {
+    const character = object(characterValue), chat = object(chatValue), id = chatId(chat), mark = marker(chat);
+    const base = { schema, hostVersion: '2026.8.250', characterId: characterId(character), hostChatId: id,
+      kind: mark.present ? 'native_branch' : 'independent_chat', status: 'independent', reason: 'no_native_branch_marker',
+      parentChatId: mark.parentChatId, parentName: mark.parentName, forkMessageId: mark.forkMessageId,
+      markerIndex: mark.markerIndex, forkMessageIndex: mark.markerIndex - 1, commonPrefixMessages: 0,
+      commonPrefixPairs: 0, canonicalPrefixEnd: 0, partialCanonicalPairs: 0, prefixDigest: '',
+      path: id ? [id] : [], pathVerified: !mark.present, inheritanceEligible: false };
+    if (!id || !base.characterId) return { ...base, status: 'unverified', reason: 'host_identity_missing', pathVerified: false };
+    if (!mark.present) return base;
+    if (!mark.valid || mark.parentChatId === id) return { ...base, status: 'unverified', reason: 'invalid_branch_marker', pathVerified: false };
+    const chats = Array.isArray(character.chats) ? character.chats : [];
+    const parents = chats.filter(item => chatId(item) === mark.parentChatId);
+    if (parents.length !== 1) return { ...base, status: 'unverified', reason: parents.length ? 'duplicate_parent_identity' : 'parent_unavailable', pathVerified: false };
+    if (chats.filter(item => chatId(item) === id).length > 1) return { ...base, status: 'unverified', reason: 'duplicate_target_identity', pathVerified: false };
+    const parent = parents[0], childRows = messages(chat), parentRows = messages(parent);
+    const common = prefix(parent, chat, mark.markerIndex);
+    const result = { ...base, ...common, canonicalPrefixEnd: Math.floor(common.commonPrefixPairs / 5) * 5,
+      partialCanonicalPairs: common.commonPrefixPairs % 5, status: 'unverified', pathVerified: false, path: [mark.parentChatId, id] };
+    const forkIndexes = parentRows.map((item, i) => str(unwrap(item).chatId) === mark.forkMessageId ? i : -1).filter(i => i >= 0);
+    const childForkIndexes = childRows.slice(0, mark.markerIndex).map((item, i) => str(unwrap(item).chatId) === mark.forkMessageId ? i : -1).filter(i => i >= 0);
+    if (forkIndexes.length !== 1 || childForkIndexes.length !== 1) return { ...result, reason: 'fork_identity_not_unique' };
+    if (forkIndexes[0] !== mark.markerIndex - 1 || childForkIndexes[0] !== mark.markerIndex - 1) return { ...result, reason: 'fork_position_mismatch' };
+    if (common.commonPrefixMessages !== mark.markerIndex) return { ...result, status: 'diverged', reason: 'branch_prefix_changed' };
+    if (Number(parent.fmIndex ?? -1) !== Number(chat.fmIndex ?? -1)) return { ...result, status: 'diverged', reason: 'greeting_selection_changed' };
+    const seen = new Set([id, mark.parentChatId]);
+    let ancestor = parent, pathVerified = true, pathReason = '';
+    for (let depth = 0; depth < 64; depth += 1) {
+      const edge = marker(ancestor);
+      if (!edge.present) break;
+      if (!edge.valid) { pathVerified = false; pathReason = 'ancestor_marker_unverified'; break; }
+      if (seen.has(edge.parentChatId)) return { ...result, reason: 'lineage_cycle', pathVerified: false };
+      const matches = chats.filter(item => chatId(item) === edge.parentChatId);
+      result.path.unshift(edge.parentChatId); seen.add(edge.parentChatId);
+      if (matches.length !== 1) { pathVerified = false; pathReason = 'ancestor_unavailable'; break; }
+      const grandparent = matches[0], evidence = prefix(grandparent, ancestor, edge.markerIndex);
+      const parentForks = messages(grandparent).map((item, i) => str(unwrap(item).chatId) === edge.forkMessageId ? i : -1).filter(i => i >= 0);
+      if (evidence.commonPrefixMessages !== edge.markerIndex || parentForks.length !== 1 || parentForks[0] !== edge.markerIndex - 1
+        || str(unwrap(messages(ancestor)[edge.markerIndex - 1]).chatId) !== edge.forkMessageId) {
+        pathVerified = false; pathReason = 'ancestor_prefix_unverified'; break;
+      }
+      ancestor = grandparent;
+      if (depth === 63) { pathVerified = false; pathReason = 'lineage_depth_limit'; }
+    }
+    return { ...result, status: 'verified', reason: 'exact_host_branch_prefix', inheritanceEligible: true, pathVerified, pathReason };
+  };
+  const normalize = value => {
+    const v = object(value);
+    if (v.schema !== schema) return null;
+    // Metadata from storage/server is descriptive, never accepted as fresh proof.
+    const n = key => Math.max(0, Math.min(10000000, Number(v[key]) || 0));
+    const s = key => str(v[key]).slice(0, 512);
+    return { schema, hostVersion: s('hostVersion'), characterId: s('characterId'), hostChatId: s('hostChatId'),
+      kind: v.kind === 'native_branch' ? 'native_branch' : 'independent_chat',
+      status: ['verified','unverified','diverged','independent'].includes(v.status) ? v.status : 'unverified',
+      reason: s('reason'), parentChatId: s('parentChatId'), parentName: s('parentName'), forkMessageId: s('forkMessageId'),
+      markerIndex: Math.max(-1, Number(v.markerIndex) || 0), forkMessageIndex: Math.max(-1, Number(v.forkMessageIndex) || 0),
+      commonPrefixMessages: n('commonPrefixMessages'), commonPrefixPairs: n('commonPrefixPairs'), canonicalPrefixEnd: n('canonicalPrefixEnd'),
+      partialCanonicalPairs: n('partialCanonicalPairs'), prefixDigest: s('prefixDigest'),
+      path: (Array.isArray(v.path) ? v.path : []).slice(0, 66).map(x => str(x).slice(0, 512)),
+      pathVerified: v.pathVerified === true, pathReason: s('pathReason'), inheritanceEligible: v.inheritanceEligible === true };
+  };
+  const escape = value => str(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const render = (value, options = {}) => {
+    const v = normalize(value), id = str(options.chatId || v?.hostChatId || '');
+    if (!v || v.hostChatId !== id) return '<section class="ms-host-lineage"><h3>현재 세계선</h3><p>현재 채팅의 분기 근거를 확인하지 못했습니다.</p></section>';
+    const status = { verified:'공통 원문 검증됨', unverified:'분기 근거 미검증', diverged:'부모와 원문 불일치', independent:'네이티브 분기 표식 없음' }[v.status];
+    const short = text => text.length > 24 ? text.slice(0, 12) + '…' + text.slice(-8) : text;
+    const path = v.path.map(short).join(' → ') || short(id);
+    const extra = options.owner === 'libra' && v.kind === 'native_branch'
+      ? `<div>정본 승계 상한: ${v.canonicalPrefixEnd}턴 · 경계 ${v.partialCanonicalPairs}턴은 완성된 5턴 정본이 아닙니다.</div>` : '';
+    return `<section class="ms-host-lineage" x-ms-host-lineage="${escape(v.hostChatId)}" style="margin:12px 0;padding:14px 16px;border:1px solid var(--border,rgba(127,127,127,.28));border-radius:10px;overflow-wrap:anywhere"><h3 style="margin:0 0 8px;font-size:1em">현재 세계선 <small style="font-weight:normal">${escape(status)}</small></h3><div>현재 경로: ${escape(path)}</div>${v.parentChatId ? `<div>부모: ${escape(v.parentName || short(v.parentChatId))} · 분기 메시지: ${escape(short(v.forkMessageId))}</div><div>검증한 공통 원문: ${v.commonPrefixPairs} U+A턴 / ${v.commonPrefixMessages}개 메시지</div>` : ''}${extra}${v.kind === 'native_branch' && !v.pathVerified ? '<div>상위 분기 전체 경로는 미검증입니다.</div>' : ''}${options.inheritance ? `<div>${escape(options.inheritance)}</div>` : ''}<div style="opacity:.7;font-size:.85em">${escape(v.reason)}${options.worldlineId ? ' · ' + escape(options.worldlineId) : ''}</div></section>`;
+  };
+  return Object.freeze({ schema, marker, prefix, inspect, normalize, render, countPairs, fingerprint, prefixRevision, same });
+}
+/* END LIBRARIAN HOST LINEAGE SDK */
+const MemorySuiteHostLineage = createMemorySuiteHostLineage();
+
+/* LIBRARIAN SYSTEM STORAGE SDK v1.8.16
  * Scope-routed durable storage client shared by Flashback, HAYAKU, LIBRA, LIA and RE:TRACE.
  * The server stores opaque values. Each plugin keeps ownership of its own data schema.
  */
@@ -1055,6 +1326,10 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const displayName = String(options.displayName || pluginId || namespace || 'Plugin').trim();
   const managementButtonEnabled = options.managementButton !== false;
   const requestTimeoutMs = Math.max(5000, Math.min(120000, Number(options.requestTimeoutMs || 30000) || 30000));
+  const keyPageSize = Math.max(50, Math.min(1000, Number(options.keyPageSize || 400) || 400));
+  const getManyResponseBudgetBytes = Math.max(256 * 1024, Math.min(8 * 1024 * 1024, Number(options.getManyResponseBudgetBytes || 4 * 1024 * 1024) || 4 * 1024 * 1024));
+  const interactiveSetValueBudgetBytes = Math.max(256 * 1024, Math.min(4 * 1024 * 1024, Number(options.interactiveSetValueBudgetBytes || 4 * 1024 * 1024) || 4 * 1024 * 1024));
+  const maxStoragePaginationPages = Math.max(10, Math.min(100000, Number(options.maxStoragePaginationPages || 10000) || 10000));
   // Bootstrap is only a reachability/contract probe.  Keeping its deadline
   // separate prevents an offline loopback endpoint (or an HTML error page from
   // a browser interceptor) from blocking each plugin's local pluginStorage
@@ -1078,6 +1353,28 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const localProxyCache = new WeakMap();
   const migrationStateByLegacy = new WeakMap();
   const mutationTails = new Map();
+  const lifecycle = {
+    disposed: false,
+    timers: new Set(),
+    abortControllers: new Set()
+  };
+  const scheduleLifecycleTimeout = (callback, delayMs) => {
+    if (lifecycle.disposed) return null;
+    let timer = null;
+    timer = setTimeout(() => {
+      lifecycle.timers.delete(timer);
+      if (lifecycle.disposed) return;
+      callback();
+    }, Math.max(0, Number(delayMs || 0) || 0));
+    lifecycle.timers.add(timer);
+    try { timer?.unref?.(); } catch (_) {}
+    return timer;
+  };
+  const clearLifecycleTimeout = timer => {
+    if (!timer) return;
+    clearTimeout(timer);
+    lifecycle.timers.delete(timer);
+  };
   const autoMigratePlugin = options.autoMigratePlugin !== false;
   const autoMigrateLocal = options.autoMigrateLocal !== false;
   const migrationConcurrency = Math.max(1, Math.min(4, Number(options.migrationConcurrency || 2) || 2));
@@ -1088,8 +1385,17 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   // keys and explicit scope-key records correctly when currentScope is null.
   const preResolveKeyScope = options.preResolveKeyScope === true;
   const scopeRoutingEnabled = options.scopeRouting !== false;
+  const startupDiagnosticsEnabled = options.startupDiagnostics !== false;
   const scopeCacheMs = Math.max(0, Math.min(10000, Number(options.scopeCacheMs || 0) || 0));
   const sharedRouteModeRaw = String(options.sharedRouteMode || MODE_MIRROR);
+  // Optional owner semantic validation runs only after the SDK has restored and
+  // read back every generic key.  It lets each plugin reject a structurally
+  // complete but semantically unusable snapshot without weakening the common
+  // key/digest coverage checks.
+  const validateRestore = typeof options.validateRestore === 'function' ? options.validateRestore : null;
+  const resolveRestoreDependencies = typeof options.resolveRestoreDependencies === 'function' ? options.resolveRestoreDependencies : null;
+  const requireRestoreValidation = options.requireRestoreValidation === true;
+  const allowEmptyRestore = options.allowEmptyRestore === true;
   const namespaceDelaySeed = Array.from(namespace).reduce((sum, char) => sum + char.charCodeAt(0), 0);
   const migrationDelayMs = Math.max(250, Math.min(10000, Number(options.migrationDelayMs || (700 + (namespaceDelaySeed % 7) * 240)) || 700));
   const state = {
@@ -1120,6 +1426,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const SYNC_JOB_SCHEMA = 'memory-suite.sync-job.v1';
   const SYNC_JOB_STORAGE_KEY = `__memory_suite_internal_sync_job_v1__:${namespace}`;
   const SYNC_JOB_RETRY_DELAYS_MS = Object.freeze([3000, 5000, 10000, 20000, 30000]);
+  const SYNC_JOB_MAX_RETRIES = 8;
+  const SYNC_JOB_RESUME_TTL_MS = 2 * 60 * 60 * 1000;
   const SCOPE_ROUTING_SCHEMA = 'memory-suite.scope-routing.v1';
   const SCOPE_ROUTING_LOCAL_KEY = `__memory_suite_internal_scope_routes_v1__:${namespace}`;
   const SCOPE_ROUTING_SERVER_KEY = `__memory_suite_scope_routes_v1__:${namespace}`;
@@ -1137,8 +1445,12 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const warnOnce = (code, error) => {
     const key = String(code || 'warning');
     if (state.warned.has(key)) return;
+    if (state.warned.size >= 256) {
+      const oldest = state.warned.values().next().value;
+      if (oldest !== undefined) state.warned.delete(oldest);
+    }
     state.warned.add(key);
-    try { console.warn(`[Memory Suite/${pluginId}] ${key}:`, error?.message || error || 'unknown'); } catch (_) {}
+    try { console.warn(`[Librarian System/${pluginId}] ${key}:`, error?.message || error || 'unknown'); } catch (_) {}
   };
 
   const storageValueBytes = value => {
@@ -1147,6 +1459,22 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (serialized == null) serialized = '';
     try { if (typeof TextEncoder === 'function') return new TextEncoder().encode(String(serialized)).byteLength; } catch (_) {}
     return String(serialized).length * 2;
+  };
+
+  // Batch-read values may legally use keys such as "__proto__".  Assigning
+  // those keys with Object.assign or bracket notation can invoke inherited
+  // setters and mutate the accumulator prototype.  Define own data properties
+  // explicitly so opaque owner keys remain data, never object structure.
+  const defineStorageRecordValue = (target, key, value) => {
+    Object.defineProperty(target, String(key), {
+      value, enumerable: true, configurable: true, writable: true
+    });
+    return target;
+  };
+  const mergeStorageRecordValues = (target, source) => {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return target;
+    for (const [key, value] of Object.entries(source)) defineStorageRecordValue(target, key, value);
+    return target;
   };
 
   const syncJobTerminal = status => ['completed', 'failed', 'cancelled'].includes(String(status || ''));
@@ -1161,7 +1489,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     }
   };
   const persistSyncJobNow = async () => {
-    if (state.syncJob.persistTimer) { clearTimeout(state.syncJob.persistTimer); state.syncJob.persistTimer = null; }
+    if (state.syncJob.persistTimer) { clearLifecycleTimeout(state.syncJob.persistTimer); state.syncJob.persistTimer = null; }
     const legacy = state.legacy.plugin;
     const job = state.syncJob.current;
     if (!legacy || typeof legacy.setItem !== 'function' || !job) return false;
@@ -1174,7 +1502,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const scheduleSyncJobPersist = (immediate = false) => {
     if (immediate) { void persistSyncJobNow(); return; }
     if (state.syncJob.persistTimer) return;
-    state.syncJob.persistTimer = setTimeout(() => {
+    state.syncJob.persistTimer = scheduleLifecycleTimeout(() => {
       state.syncJob.persistTimer = null;
       void persistSyncJobNow();
     }, 650);
@@ -1262,7 +1590,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
       if (!parsed || parsed.schema !== SYNC_JOB_SCHEMA || parsed.namespace !== namespace) return null;
       const age = Date.now() - Math.max(0, Number(parsed.updatedAt || parsed.startedAt || 0) || 0);
-      if (age > 24 * 60 * 60 * 1000) return null;
+      if (age > SYNC_JOB_RESUME_TTL_MS) return null;
       if (!syncJobTerminal(parsed.status)) {
         parsed.status = 'paused';
         parsed.phase = 'resume_pending';
@@ -1295,7 +1623,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const rawCode = String(error?.code || '').toUpperCase();
     const nativeJsonEnvelopeFailure = /expected double-quoted property name in json|unexpected token.*json|json(?:\.parse)?[^\n]*position\s+\d+/i.test(rawMessage);
     const unavailable = nativeJsonEnvelopeFailure || retryableSyncError(error)
-      || ['MEMORY_SUITE_TIMEOUT', 'MEMORY_SUITE_SERVER_UNAVAILABLE'].includes(rawCode);
+      || ['MEMORY_SUITE_TIMEOUT', 'MEMORY_SUITE_SERVER_UNAVAILABLE', 'MEMORY_SUITE_SERVER_INVALID_JSON'].includes(rawCode);
     if (!unavailable) return error instanceof Error ? error : new Error(rawMessage);
     const normalized = new Error('memory_suite_server_unavailable');
     normalized.code = 'MEMORY_SUITE_SERVER_UNAVAILABLE';
@@ -1379,7 +1707,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
 
   const modeLabel = mode => mode === MODE_MIRROR
-    ? '플러그인 + 서버 병존'
+    ? '미러'
     : (mode === MODE_SERVER_ONLY ? '서버 단독' : '플러그인 단독');
 
   const normalizeServerUrl = rawValue => {
@@ -1434,10 +1762,14 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const persistServerUrl = async urlValue => {
     const url = normalizeServerUrl(urlValue);
     await setArgumentValue(urlArguments[0] || 'memory_suite_server_url', url);
-    state.config.at = 0;
     resetBootstrapCache();
-    const verified = await readConfig(true);
-    if (verified.url !== url) throw new Error(`memory_suite_url_readback_mismatch:${verified.url}->${url}`);
+    // URL persistence must not re-import the retired global mode argument.  In
+    // scope-routed builds that argument is intentionally pinned to plugin_only;
+    // readConfig(true) here used to overwrite the active scope's display state.
+    const verifiedUrl = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
+    if (verifiedUrl !== url) throw new Error(`memory_suite_url_readback_mismatch:${verifiedUrl}->${url}`);
+    const verified = { ...state.config, at: Date.now(), url };
+    state.config = verified;
     setStatus('url_changed', '', { url });
     return verified;
   };
@@ -1462,6 +1794,11 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
 
   const fetchApi = (url, init = {}) => {
+    if (lifecycle.disposed) {
+      const error = new Error('memory_suite_bridge_disposed');
+      error.code = 'MEMORY_SUITE_BRIDGE_DISPOSED';
+      throw error;
+    }
     const requestInit = {
       ...init,
       networkRoute: 'local_network',
@@ -1476,7 +1813,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     throw new Error('memory_suite_server_fetch_unavailable');
   };
 
-  const withTimeout = async (promise, label, timeoutMs = requestTimeoutMs) => {
+  const withTimeout = async (promise, label, timeoutMs = requestTimeoutMs, onTimeout = null) => {
     const effectiveTimeoutMs = Math.max(250, Number(timeoutMs || requestTimeoutMs) || requestTimeoutMs);
     let timer = null;
     try {
@@ -1484,7 +1821,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         Promise.resolve(promise),
         new Promise((_, reject) => {
           timer = setTimeout(() => {
-            const error = new Error(`${label || 'Memory Suite request'} timed out after ${effectiveTimeoutMs}ms`);
+            try { onTimeout?.(); } catch (_) {}
+            const error = new Error(`${label || 'Librarian System request'} timed out after ${effectiveTimeoutMs}ms`);
             error.code = 'MEMORY_SUITE_TIMEOUT';
             reject(error);
           }, effectiveTimeoutMs);
@@ -1495,9 +1833,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     }
   };
 
-  const responseText = async (response, label, timeoutMs = requestTimeoutMs) => {
-    if (typeof response?.text === 'function') return await withTimeout(response.text(), `${label} response`, timeoutMs);
-    if (typeof response?.json === 'function') return JSON.stringify(await withTimeout(response.json(), `${label} response`, timeoutMs));
+  const responseText = async (response, label, timeoutMs = requestTimeoutMs, onTimeout = null) => {
+    if (typeof response?.text === 'function') return await withTimeout(response.text(), `${label} response`, timeoutMs, onTimeout);
+    if (typeof response?.json === 'function') return JSON.stringify(await withTimeout(response.json(), `${label} response`, timeoutMs, onTimeout));
     if (typeof response === 'string') return response;
     if (response && typeof response === 'object' && Object.prototype.hasOwnProperty.call(response, 'data')) {
       return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
@@ -1505,21 +1843,43 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     return JSON.stringify(response || {});
   };
 
-  const fetchJson = async (url, init = {}, label = 'Memory Suite request', timeoutMs = requestTimeoutMs) => {
-    const response = await withTimeout(fetchApi(url, init), label, timeoutMs);
-    const raw = await responseText(response, label, timeoutMs);
-    let payload = null;
-    try { payload = raw ? JSON.parse(raw) : {}; }
-    catch (_) { throw new Error('memory_suite_server_invalid_json'); }
-    const status = Number(response?.status || payload?.status || 0);
-    const ok = typeof response?.ok === 'boolean' ? response.ok : (status ? status >= 200 && status < 300 : payload?.ok === true);
-    if (!ok || payload?.ok !== true) {
-      const error = new Error(payload?.error || `memory_suite_server_http_${status || 'unknown'}`);
-      error.status = status;
-      error.payload = payload;
-      throw error;
+  const fetchJson = async (url, init = {}, label = 'Librarian System request', timeoutMs = requestTimeoutMs) => {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const upstreamSignal = init?.signal || null;
+    const abort = () => { try { controller?.abort?.(); } catch (_) {} };
+    const forwardAbort = () => abort();
+    if (controller) lifecycle.abortControllers.add(controller);
+    if (upstreamSignal?.aborted) abort();
+    else {
+      try { upstreamSignal?.addEventListener?.('abort', forwardAbort, { once: true }); } catch (_) {}
     }
-    return payload;
+    try {
+      const requestInit = controller ? { ...init, signal: controller.signal } : init;
+      const response = await withTimeout(fetchApi(url, requestInit), label, timeoutMs, abort);
+      const raw = await responseText(response, label, timeoutMs, abort);
+      let payload = null;
+      try { payload = raw ? JSON.parse(raw) : {}; }
+      catch (parseError) {
+        const error = new Error('memory_suite_server_invalid_json');
+        error.code = 'MEMORY_SUITE_SERVER_INVALID_JSON';
+        error.status = Number(response?.status || 0);
+        error.responsePreview = compact(raw, 200);
+        error.cause = parseError;
+        throw error;
+      }
+      const status = Number(response?.status || payload?.status || 0);
+      const ok = typeof response?.ok === 'boolean' ? response.ok : (status ? status >= 200 && status < 300 : payload?.ok === true);
+      if (!ok || payload?.ok !== true) {
+        const error = new Error(payload?.error || `memory_suite_server_http_${status || 'unknown'}`);
+        error.status = status;
+        error.payload = payload;
+        throw error;
+      }
+      return payload;
+    } finally {
+      if (controller) lifecycle.abortControllers.delete(controller);
+      try { upstreamSignal?.removeEventListener?.('abort', forwardAbort); } catch (_) {}
+    }
   };
 
   const validateBootstrapPayload = (payload, requestedUrl = '') => {
@@ -1552,13 +1912,16 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         'X-Memory-Suite-Plugin': pluginId,
         'X-Memory-Suite-Plugin-Version': pluginVersion
       }
-    }, 'Memory Suite connection test', bootstrapRequestTimeoutMs);
+    }, 'Librarian System connection test', bootstrapRequestTimeoutMs);
     return validateBootstrapPayload(payload, url);
   };
 
   const testConnection = async urlValue => {
-    const config = await readConfig(true).catch(() => ({ mode: MODE_PLUGIN_ONLY, url: defaultUrl }));
-    const url = normalizeServerUrl(urlValue || config.url || defaultUrl);
+    // A connection probe is observational.  Never call readConfig(true) here:
+    // the legacy global mode argument is plugin_only by design and forcing it
+    // used to make a mirror/server_only scope appear to switch modes.
+    const configuredUrl = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl).catch(() => defaultUrl));
+    const url = normalizeServerUrl(urlValue || configuredUrl || defaultUrl);
     const startedAt = Date.now();
     try {
       const connection = await bootstrapAtUrl(url);
@@ -1569,7 +1932,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           'X-Memory-Suite-Plugin': pluginId,
           'X-Memory-Suite-Plugin-Version': pluginVersion
         }
-      }, 'Memory Suite namespace integrity');
+      }, 'Librarian System namespace integrity');
       const integrity = integrityPayload?.result || null;
       if (integrity?.ok !== true) throw new Error(`memory_suite_namespace_integrity_failed:${integrity?.result || 'unknown'}`);
       const result = {
@@ -1586,20 +1949,25 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         fileBytes: Math.max(0, Number(integrity?.fileBytes || 0) || 0),
         durationMs: Date.now() - startedAt
       };
-      if (url === config.url) {
-        state.bootstrap = { at: Date.now(), baseUrl: config.url, value: connection, pending: null };
+      if (url === configuredUrl) {
+        state.bootstrap = { at: Date.now(), baseUrl: configuredUrl, value: connection, pending: null };
         setStatus('connected', '', { serverVersion: connection.version, url: connection.url, protocol: connection.protocol });
       }
       return result;
     } catch (error) {
       const normalized = normalizeServerAvailabilityError(error);
       const result = { ok: false, url, error: compact(normalized?.message || normalized, 700), durationMs: Date.now() - startedAt };
-      if (url === config.url) setStatus('unavailable', result.error, { url });
+      if (url === configuredUrl) setStatus('unavailable', result.error, { url });
       return result;
     }
   };
 
   const bootstrap = async (force = false, allowPluginOnly = false) => {
+    if (lifecycle.disposed) {
+      const error = new Error('memory_suite_bridge_disposed');
+      error.code = 'MEMORY_SUITE_BRIDGE_DISPOSED';
+      throw error;
+    }
     const config = await readConfig();
     if (config.mode === MODE_PLUGIN_ONLY && allowPluginOnly !== true) return null;
     const cached = state.bootstrap;
@@ -1616,7 +1984,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           'X-Memory-Suite-Plugin': pluginId,
           'X-Memory-Suite-Plugin-Version': pluginVersion
         }
-      }, 'Memory Suite bootstrap', bootstrapRequestTimeoutMs);
+      }, 'Librarian System bootstrap', bootstrapRequestTimeoutMs);
       const value = validateBootstrapPayload(payload, config.url);
       sharedBootstrapFailures.delete(config.url);
       state.bootstrap = { at: Date.now(), baseUrl: config.url, value, pending: null };
@@ -1667,11 +2035,19 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       ...(body == null ? {} : { body: JSON.stringify(body) })
     };
     try {
-      return await fetchJson(`${connection.url}${route}`, init, `Memory Suite ${method} ${route}`);
+      return await fetchJson(`${connection.url}${route}`, init, `Librarian System ${method} ${route}`);
     } catch (error) {
       if (error?.status === 403 && requestOptions.authRetry !== false) {
         await bootstrap(true, requestOptions.allowPluginOnly === true);
         return await request(method, route, body, { ...requestOptions, authRetry: false });
+      }
+      const unavailable = normalizeServerAvailabilityError(error);
+      if (unavailable?.code === 'MEMORY_SUITE_SERVER_UNAVAILABLE') {
+        const circuitUrl = String(connection.requestedUrl || state.config.url || '');
+        if (circuitUrl) sharedBootstrapFailures.set(circuitUrl, {
+          at: Date.now(), message: unavailable.message, code: unavailable.code
+        });
+        resetBootstrapCache();
       }
       setStatus('request_failed', error?.message || error, { route, method });
       throw error;
@@ -1704,7 +2080,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const statusReadback = async (id, requestOptions = {}) => {
     try {
-      return await request('GET', `/v1/operations/${encodeURIComponent(namespace)}/${encodeURIComponent(id)}`, null, { authRetry: true, allowPluginOnly: requestOptions.allowPluginOnly === true });
+      return await request('GET', `/v1/operations/${encodeURIComponent(namespace)}/${encodeURIComponent(id)}`, null, { authRetry: true, allowPluginOnly: requestOptions.allowPluginOnly === true, forceBootstrap:requestOptions.forceBootstrap === true });
     } catch (error) {
       if (error?.status === 404) return null;
       throw error;
@@ -1723,24 +2099,72 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const remoteGetMany = async (space, keys = [], requestOptions = {}) => {
     const list = Array.isArray(keys) ? keys.map(value => String(value || '')).filter(Boolean).slice(0, 512) : [];
-    if (!list.length) return { values: {} };
-    const payload = await request(
-      'POST',
-      '/v1/kv/get-many',
-      { namespace, space, keys: list },
-      { allowPluginOnly: requestOptions.allowPluginOnly === true }
-    );
-    return payload?.result || { values: {} };
+    if (!list.length) return { values: {}, pages: 0, oversizedKeys: [] };
+    const values = {};
+    const oversizedKeys = new Set();
+    let cursor = 0;
+    let pages = 0;
+    for (;;) {
+      if (pages >= maxStoragePaginationPages) throw new Error('memory_suite_get_many_pagination_limit_exceeded');
+      const payload = await request(
+        'POST',
+        '/v1/kv/get-many',
+        { namespace, space, keys: list, paged: true, cursor, maxResponseBytes: getManyResponseBudgetBytes },
+        { allowPluginOnly: requestOptions.allowPluginOnly === true }
+      );
+      pages += 1;
+      const result = payload?.result || { values: {} };
+      mergeStorageRecordValues(values, result.values);
+      for (const key of Array.isArray(result.oversizedKeys) ? result.oversizedKeys : []) oversizedKeys.add(String(key));
+      const nextCursor = result?.continuation?.nextCursor;
+      if (nextCursor == null) break;
+      const normalizedNext = Number(nextCursor);
+      if (!Number.isInteger(normalizedNext) || normalizedNext <= cursor || normalizedNext > list.length) {
+        throw new Error('memory_suite_get_many_pagination_cursor_invalid');
+      }
+      cursor = normalizedNext;
+    }
+    for (const key of oversizedKeys) defineStorageRecordValue(values, key, await remoteGet(space, key, requestOptions));
+    return { values, pages, oversizedKeys: [...oversizedKeys] };
   };
 
   const remoteKeys = async (space, prefix = '', requestOptions = {}) => {
-    const payload = await request(
-      'GET',
-      `/v1/kv/keys?namespace=${encodeURIComponent(namespace)}&space=${encodeURIComponent(space)}&prefix=${encodeURIComponent(prefix)}`,
-      null,
-      { allowPluginOnly: requestOptions.allowPluginOnly === true }
-    );
-    return payload?.result || { keys: [], tombstones: [] };
+    const keys = [];
+    const tombstones = [];
+    const records = [];
+    const seenKeys = new Set();
+    const seenTombstones = new Set();
+    const seenRecords = new Set();
+    let cursor = '';
+    let pages = 0;
+    for (;;) {
+      if (pages >= maxStoragePaginationPages) throw new Error('memory_suite_keys_pagination_limit_exceeded');
+      const payload = await request(
+        'GET',
+        `/v1/kv/keys?namespace=${encodeURIComponent(namespace)}&space=${encodeURIComponent(space)}&prefix=${encodeURIComponent(prefix)}&paged=1&limit=${keyPageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+        null,
+        { allowPluginOnly: requestOptions.allowPluginOnly === true }
+      );
+      pages += 1;
+      const result = payload?.result || { keys: [], tombstones: [], records: [] };
+      for (const key of Array.isArray(result.keys) ? result.keys : []) {
+        const normalized = String(key);
+        if (!seenKeys.has(normalized)) { seenKeys.add(normalized); keys.push(normalized); }
+      }
+      for (const key of Array.isArray(result.tombstones) ? result.tombstones : []) {
+        const normalized = String(key);
+        if (!seenTombstones.has(normalized)) { seenTombstones.add(normalized); tombstones.push(normalized); }
+      }
+      for (const row of Array.isArray(result.records) ? result.records : []) {
+        const identity = `${String(row?.space || space)}\u0000${String(row?.key || '')}`;
+        if (!seenRecords.has(identity)) { seenRecords.add(identity); records.push(row); }
+      }
+      const nextCursor = String(result.nextCursor || result?.page?.nextCursor || '');
+      if (!nextCursor) break;
+      if (nextCursor === cursor) throw new Error('memory_suite_keys_pagination_cursor_stalled');
+      cursor = nextCursor;
+    }
+    return { keys, tombstones, records, page: { pages, complete: true } };
   };
 
   const remoteIntegrity = async (requestOptions = {}) => {
@@ -1760,6 +2184,22 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
 
   const remoteMutate = async (kind, space, key, value, mutateOptions = {}) => {
+    const writerAlias = flashbackWriterAlias(key);
+    if (writerAlias && mutateOptions.writerSession !== true) {
+      return await withFlashbackWriter(key, () => remoteMutate(kind, space, key, value, { ...mutateOptions, writerSession:true }), { forceServer: true });
+    }
+    const fence = writerAlias ? await usableFlashbackFence(key) : null;
+    if (kind === 'set') {
+      const valueBytes = storageValueBytes(value);
+      if (valueBytes > interactiveSetValueBudgetBytes) {
+        const error = new Error(`memory_suite_interactive_value_too_large_use_shards:${valueBytes}>${interactiveSetValueBudgetBytes}`);
+        error.code = 'MEMORY_SUITE_INTERACTIVE_VALUE_TOO_LARGE';
+        error.valueBytes = valueBytes;
+        error.maxValueBytes = interactiveSetValueBudgetBytes;
+        error.storageMutationRejected = true;
+        throw error;
+      }
+    }
     const id = operationId(kind);
     const expectedRevision = Number.isInteger(Number(mutateOptions.expectedRevision))
       ? Math.max(0, Number(mutateOptions.expectedRevision))
@@ -1770,7 +2210,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       space,
       key,
       ...(kind === 'set' ? { value } : {}),
-      ...(expectedRevision == null ? {} : { expectedRevision })
+      ...(expectedRevision == null ? {} : { expectedRevision }),
+      ...(fence ? { fence } : {})
     };
     const verifyStored = async receipt => {
       const stored = await remoteGet(space, key, { allowPluginOnly: mutateOptions.allowPluginOnly === true });
@@ -1789,8 +2230,12 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       const payload = await request('POST', `/v1/kv/${kind}`, body, { allowPluginOnly: mutateOptions.allowPluginOnly === true });
       return await verifyStored(verifyReceipt(payload, id, space, key));
     } catch (error) {
+      if (writerAlias && error?.status >= 400 && error?.status < 500 && error.status !== 408) {
+        error.storageMutationRejected = true;
+        throw error;
+      }
       try {
-        const status = await statusReadback(id, { allowPluginOnly: mutateOptions.allowPluginOnly === true });
+        const status = await statusReadback(id, { allowPluginOnly: mutateOptions.allowPluginOnly === true, forceBootstrap:!!writerAlias });
         if (status) return await verifyStored(verifyReceipt(status, id, space, key));
       } catch (_) {}
       error.storageMutationIndeterminate = true;
@@ -1877,6 +2322,40 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       throw error;
     }
     return listed.filter(key => matchesRoute(space, key) || (includeArtifacts && isOwnedChunkArtifact(space, key)));
+  };
+
+  // Owner-only maintenance primitives. They intentionally bypass server
+  // routing, but still enforce this namespace's route allowlist and durable
+  // readback. Product code uses them only after authenticated RE:TRACE IPC has
+  // identified an exact metadata shell; they are never exposed to GUI input.
+  const ownerLegacyForSpace = space => String(space || 'plugin') === 'local'
+    ? state.legacy.local
+    : state.legacy.plugin;
+  const ownerLegacyKeys = async (space = 'plugin', includeArtifacts = true) => {
+    const normalizedSpace = String(space || 'plugin') === 'local' ? 'local' : 'plugin';
+    return await listRoutedLegacyKeys(ownerLegacyForSpace(normalizedSpace), normalizedSpace, includeArtifacts === true);
+  };
+  const ownerLegacyRead = async (space, key) => {
+    const normalizedSpace = String(space || 'plugin') === 'local' ? 'local' : 'plugin';
+    const logicalKey = String(key || '');
+    if (!matchesRoute(normalizedSpace, logicalKey)) throw new Error('memory_suite_owner_legacy_route_denied');
+    return await legacyRead(ownerLegacyForSpace(normalizedSpace), logicalKey);
+  };
+  const ownerLegacyWrite = async (space, key, value) => {
+    const normalizedSpace = String(space || 'plugin') === 'local' ? 'local' : 'plugin';
+    const logicalKey = String(key || '');
+    if (!matchesRoute(normalizedSpace, logicalKey)) throw new Error('memory_suite_owner_legacy_route_denied');
+    const written = await legacyWriteVerified(ownerLegacyForSpace(normalizedSpace), logicalKey, value);
+    if (!written) throw new Error('memory_suite_owner_legacy_write_failed');
+    return true;
+  };
+  const ownerLegacyRemove = async (space, key) => {
+    const normalizedSpace = String(space || 'plugin') === 'local' ? 'local' : 'plugin';
+    const logicalKey = String(key || '');
+    if (!matchesRoute(normalizedSpace, logicalKey)) throw new Error('memory_suite_owner_legacy_route_denied');
+    const removed = await legacyRemoveVerified(ownerLegacyForSpace(normalizedSpace), logicalKey);
+    if (!removed) throw new Error('memory_suite_owner_legacy_remove_failed');
+    return true;
   };
 
   const migrateFromLegacy = async (space, key, legacyGet = null) => {
@@ -2155,25 +2634,12 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       untrackedLocalKeys: untracked.slice(), integrity,
       totalItems: progress.totalItems, processedItems: 0, processedBytes: 0, transferredBytes: 0
     };
-
-    if (options.pruneUntracked === true) {
-      for (const key of pruneKeys) {
-        let action = '추적되지 않은 로컬 값 정리';
-        try {
-          report('prune_local', { currentAction: action, currentKey: key });
-          const ok = await legacyRemoveVerified(legacy, key);
-          if (!ok) throw new Error('untracked_local_prune_failed');
-          result.pruned += 1;
-          action = '정리 완료';
-        } catch (error) {
-          result.failures.push({ key, error: compact(error?.message || error, 220) }); action = '정리 실패';
-        } finally {
-          result.processedItems += 1; progress.processedItems = result.processedItems; progress.failureCount = result.failures.length;
-          report('prune_local', { currentAction: action, currentKey: key });
-        }
-      }
-      result.untrackedLocalKeys = [];
-    }
+    const originalValues = new Map();
+    const mutationOrder = [];
+    const captureOriginal = async key => {
+      if (!originalValues.has(key)) originalValues.set(key, await legacyRead(legacy, key));
+      if (!mutationOrder.includes(key)) mutationOrder.push(key);
+    };
 
     for (let offset = 0; offset < serverKeys.length; offset += 256) {
       const batchKeys = serverKeys.slice(offset, offset + 256);
@@ -2187,6 +2653,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           report('restore_values', { currentAction: action, currentKey: key });
           const remote = values[key] || await remoteGet(normalizedSpace, key, { allowPluginOnly: options.allowPluginOnly === true });
           if (remote.exists !== true) throw new Error('server_key_disappeared_during_restore');
+          await captureOriginal(key);
           const ok = await legacyWriteVerified(legacy, key, remote.value);
           if (!ok) throw new Error('legacy_restore_write_failed');
           result.restored += 1; result.verified += 1; result.transferredBytes += bytes || storageValueBytes(remote.value);
@@ -2207,6 +2674,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         report('restore_tombstones', { currentAction: action, currentKey: key });
         const current = await legacyRead(legacy, key);
         if (!isNullishStorageValue(current)) {
+          await captureOriginal(key);
           const ok = await legacyRemoveVerified(legacy, key);
           if (!ok) throw new Error('legacy_restore_tombstone_failed');
           result.removed += 1;
@@ -2218,6 +2686,42 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         result.processedItems += 1; progress.processedItems = result.processedItems; progress.removed = result.removed; progress.failureCount = result.failures.length;
         report('restore_tombstones', { currentAction: action, currentKey: key });
       }
+    }
+    if (result.failures.length === 0 && options.pruneUntracked === true) {
+      for (const key of pruneKeys) {
+        let action = '추적되지 않은 로컬 값 정리';
+        try {
+          report('prune_local', { currentAction: action, currentKey: key });
+          await captureOriginal(key);
+          const ok = await legacyRemoveVerified(legacy, key);
+          if (!ok) throw new Error('untracked_local_prune_failed');
+          result.pruned += 1;
+          action = '정리 완료';
+        } catch (error) {
+          result.failures.push({ key, error: compact(error?.message || error, 220) }); action = '정리 실패';
+        } finally {
+          result.processedItems += 1; progress.processedItems = result.processedItems; progress.failureCount = result.failures.length;
+          report('prune_local', { currentAction: action, currentKey: key });
+        }
+      }
+      if (result.failures.length === 0) result.untrackedLocalKeys = [];
+    }
+    const restoreWillFail = result.failures.length > 0
+      || (options.requireFullCoverage === true && result.untrackedLocalKeys.length > 0);
+    if (restoreWillFail && mutationOrder.length) {
+      const rollbackFailures = [];
+      for (const key of mutationOrder.slice().reverse()) {
+        try {
+          const original = originalValues.get(key);
+          const ok = isNullishStorageValue(original)
+            ? await legacyRemoveVerified(legacy, key)
+            : await legacyWriteVerified(legacy, key, original);
+          if (!ok) throw new Error('legacy_restore_rollback_readback_failed');
+        } catch (error) {
+          rollbackFailures.push({ key, error: compact(error?.message || error, 220) });
+        }
+      }
+      result.rollback = { attempted: mutationOrder.length, failures: rollbackFailures, ok: rollbackFailures.length === 0 };
     }
     result.ok = result.failures.length === 0 && (options.requireFullCoverage !== true || result.untrackedLocalKeys.length === 0);
     report(result.ok ? 'space_complete' : 'space_incomplete', {
@@ -2426,7 +2930,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         error.connectionTest = connectionTest;
         throw error;
       }
-      report('connection_ready', { currentAction: '서버 연결 확인 완료', message: `Memory Suite ${connectionTest.serverVersion || '-'} 연결됨` });
+      report('connection_ready', { currentAction: '서버 연결 확인 완료', message: `Librarian System ${connectionTest.serverVersion || '-'} 연결됨` });
 
       if (targetUrl !== original.url && original.mode === MODE_SERVER_ONLY) {
         report('restore_before_url_change', { currentAction: '기존 서버 데이터 로컬 복구', message: '서버 주소 변경 전에 현재 서버 DATA를 pluginStorage로 안전하게 복구합니다.' });
@@ -2553,7 +3057,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const job = state.syncJob.current;
     if (!job || syncJobTerminal(job.status)) return getSyncJob();
     if (state.syncJob.promise) return state.syncJob.promise;
-    if (state.syncJob.retryTimer) { clearTimeout(state.syncJob.retryTimer); state.syncJob.retryTimer = null; }
+    if (state.syncJob.retryTimer) { clearLifecycleTimeout(state.syncJob.retryTimer); state.syncJob.retryTimer = null; }
     updateSyncJob({ status: 'running', phase: job.phase === 'resume_pending' ? 'resuming' : (job.phase || 'starting'), nextRetryAt: 0, error: '' });
     const runner = (async () => {
       try {
@@ -2572,7 +3076,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         await completeBackgroundJob(result);
         return result;
       } catch (error) {
-        if (retryableSyncError(error) && Number(state.syncJob.current?.retryCount || 0) < 120) {
+        if (retryableSyncError(error) && Number(state.syncJob.current?.retryCount || 0) < SYNC_JOB_MAX_RETRIES) {
           const retryCount = Number(state.syncJob.current?.retryCount || 0) + 1;
           const delay = SYNC_JOB_RETRY_DELAYS_MS[Math.min(SYNC_JOB_RETRY_DELAYS_MS.length - 1, retryCount - 1)];
           updateSyncJob({
@@ -2580,7 +3084,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
             message: `서버 연결이 일시적으로 끊겼습니다. ${Math.ceil(delay / 1000)}초 후 이어서 확인합니다.`,
             error: compact(error?.message || error, 420), retryCount, nextRetryAt: Date.now() + delay
           }, { persist: 'immediate' });
-          state.syncJob.retryTimer = setTimeout(() => {
+          state.syncJob.retryTimer = scheduleLifecycleTimeout(() => {
             state.syncJob.retryTimer = null;
             void executeBackgroundJob();
           }, delay);
@@ -2686,9 +3190,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const current = await readConfig(true);
     const proofNeedsTransientServer = current.mode === MODE_PLUGIN_ONLY;
     if (proofNeedsTransientServer) state.transientMode = MODE_MIRROR;
+    try {
     let beforeIntegrity;
-    try { beforeIntegrity = await remoteIntegrity(); }
-    catch (error) { if (proofNeedsTransientServer) state.transientMode = ''; throw error; }
+    beforeIntegrity = await remoteIntegrity();
     let pluginRestore = null;
     let localRestore = null;
     let pluginSync = null;
@@ -2754,6 +3258,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     state.management.lastResult = receipt;
     setStatus('scope_delete_owner_ready', '', { mode: MODE_PLUGIN_ONLY, scopeId: receipt.scopeId });
     return receipt;
+    } finally {
+      if (proofNeedsTransientServer) state.transientMode = '';
+    }
   };
 
   const deletePluginStorageAfterServerVerification = async () => {
@@ -2761,7 +3268,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
     const current = await readConfig(true);
     if (current.mode === MODE_PLUGIN_ONLY) {
-      const error = new Error('pluginStorage 삭제는 플러그인 + 서버 병존 또는 서버 단독 모드에서만 사용할 수 있습니다.');
+      const error = new Error('pluginStorage 삭제는 미러 또는 서버 단독 모드에서만 사용할 수 있습니다.');
       error.code = 'MEMORY_SUITE_DELETE_REQUIRES_SERVER_MODE';
       throw error;
     }
@@ -2855,7 +3362,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (!force && record.completed) return null;
     if (!force && record.retryAt > timestamp) return null;
     if (record.timer) return null;
-    record.timer = setTimeout(() => {
+    record.timer = scheduleLifecycleTimeout(() => {
       record.timer = null;
       record.running = migrateAllLegacy(legacy, space)
         .then(result => {
@@ -2965,7 +3472,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       const localOk = typeof legacyRemove === 'function' ? await legacyRemove() : false;
       if (!localOk) {
         if (!isNullishStorageValue(previousLocal)) {
-          try { await serializeMutation(space, key, () => remoteMutate('set', space, key, previousLocal)); } catch (_) {}
+          try { await serializeMutation(space, key, () => remoteMutate('set', space, key, previousLocal)); } catch (error) { reportStorageFailure('storage.mirror.rollback', error); }
         }
         setStatus('mirror_delete_rolled_back', 'pluginStorage remove failed', { mode: MODE_MIRROR, key: compact(key, 160), space });
         return false;
@@ -3002,7 +3509,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const createProxy = (legacy, space, cache) => {
     if (!legacy || (typeof legacy !== 'object' && typeof legacy !== 'function')) return legacy;
     state.legacy[space] = legacy;
-    if (space === 'plugin') setTimeout(() => { void resumePendingSyncJob().catch(() => {}); }, 0);
+    if (space === 'plugin') scheduleLifecycleTimeout(() => { void resumePendingSyncJob().catch(() => {}); }, 0);
     if (cache.has(legacy)) { scheduleLegacyMigration(legacy, space); return cache.get(legacy); }
     const proxy = Object.freeze({
       getItem: async key => await get(
@@ -3050,7 +3557,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (!container || typeof container.querySelector !== 'function') return false;
     const instanceId = `${connectionPanelIdBase}-${++connectionPanelSequence}`;
     const title = String(panelOptions.title || `${displayName} · 서버 연결`).trim();
-    const description = String(panelOptions.description || '저장 방식과 Memory Suite 서버 주소를 설정하고 연결 상태를 확인합니다.').trim();
+    const description = String(panelOptions.description || '저장 방식과 Librarian System 서버 주소를 설정하고 연결 상태를 확인합니다.').trim();
     const config = await readConfig(true).catch(error => ({ mode: MODE_PLUGIN_ONLY, url: defaultUrl, error: compact(error?.message || error, 300) }));
     const fmtBytes = bytes => {
       const value = Math.max(0, Number(bytes || 0) || 0);
@@ -3103,8 +3610,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           <div class="mscx-head"><div><h2>${htmlEscape(title)}</h2><p>${htmlEscape(description)}</p></div><div class="mscx-state" data-mscx-state><span class="mscx-dot"></span><span data-mscx-state-text>상태 확인 중</span></div></div>
           <div class="mscx-card"><span class="mscx-card-title">저장 방식</span><div class="mscx-modes">
             <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="plugin_only"><strong>플러그인 단독 · 기본</strong><small>RisuAI pluginStorage만 사용합니다. 서버가 없어도 정상 작동합니다.</small></label>
-            <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="mirror"><strong>플러그인 + 서버 병존</strong><small>pluginStorage와 DATA 서버를 계속 동기화합니다.</small></label>
-            <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="server_only"><strong>서버 단독</strong><small>Memory Suite DATA를 영구 정본으로 사용합니다.</small></label>
+            <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="mirror"><strong>미러</strong><small>pluginStorage와 DATA 서버를 계속 동기화하고 서버 연산을 우선합니다.</small></label>
+            <label class="mscx-mode"><input type="radio" name="${instanceId}-mode" value="server_only"><strong>서버 단독</strong><small>Librarian System DATA를 영구 정본으로 사용합니다.</small></label>
           </div></div>
           <div class="mscx-card"><span class="mscx-card-title">서버 주소</span><div class="mscx-url-row"><input data-mscx-url type="url" spellcheck="false" value="${htmlEscape(config.url || defaultUrl)}"><button data-mscx-test type="button">연결 테스트</button></div><div class="mscx-note" style="margin-top:8px">별도 key 입력 없이 localhost·127.0.0.1·::1의 로컬 서버에 연결합니다. 기본 주소는 http://127.0.0.1:47630 입니다.</div></div>
           <div class="mscx-info"><div><span>현재 모드</span><strong data-mscx-mode-label>${htmlEscape(modeLabel(config.mode || MODE_PLUGIN_ONLY))}</strong></div><div><span>서버 버전</span><strong data-mscx-version>-</strong></div><div><span>프로토콜</span><strong data-mscx-protocol>-</strong></div><div><span>서버 데이터</span><strong data-mscx-records>-</strong></div><div><span>namespace</span><strong>${htmlEscape(namespace)}</strong></div></div>
@@ -3177,7 +3684,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         setMessage(job.status === 'completed'
           ? `${jobTitle(job)} 완료\n업로드 ${Number(job.uploaded || 0).toLocaleString()} · 복구 ${Number(job.restored || 0).toLocaleString()} · 일치 ${Number(job.matched || 0).toLocaleString()}`
           : `${jobTitle(job)} 실패\n${job.error || '상세 오류를 확인하세요.'}`, job.status === 'completed' ? 'good' : 'error');
-        setTimeout(() => { void refreshActionState().then(async latest => { if (latest.mode === MODE_PLUGIN_ONLY) setPluginOnlyUi(); else setConnectionUi(await testConnection(latest.url)); }); }, 0);
+        scheduleLifecycleTimeout(() => { void refreshActionState().then(async latest => { if (latest.mode === MODE_PLUGIN_ONLY) setPluginOnlyUi(); else setConnectionUi(await testConnection(latest.url)); }); }, 0);
       }
     };
     const refreshActionState = async () => {
@@ -3197,7 +3704,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     q('[data-mscx-test]').onclick = async () => {
       setMessage('서버 연결을 확인하고 있습니다…'); q('[data-mscx-test]').disabled = true;
       const result = await testConnection(q('[data-mscx-url]').value); setConnectionUi(result); renderJob(getSyncJob());
-      setMessage(result.ok ? `연결 성공\nMemory Suite ${result.serverVersion || '-'} · Protocol ${Number(result.protocol?.major || 0)}.${Number(result.protocol?.minor || 0)} · DB ${result.integrity?.result || 'ok'} · 데이터 ${Number(result.liveRecords || 0).toLocaleString()}건 · ${result.durationMs}ms` : `연결 실패\n${result.error || '서버에 연결할 수 없습니다.'}`, result.ok ? 'good' : 'error');
+      setMessage(result.ok ? `연결 성공\nLibrarian System ${result.serverVersion || '-'} · Protocol ${Number(result.protocol?.major || 0)}.${Number(result.protocol?.minor || 0)} · DB ${result.integrity?.result || 'ok'} · 데이터 ${Number(result.liveRecords || 0).toLocaleString()}건 · ${result.durationMs}ms` : `연결 실패\n${result.error || '서버에 연결할 수 없습니다.'}`, result.ok ? 'good' : 'error');
       q('[data-mscx-test]').disabled = false;
     };
 
@@ -3319,11 +3826,11 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       state.management.timer = null; attempts += 1;
       const result = await registerManagementButton();
       if (!result && attempts < 8) {
-        state.management.timer = setTimeout(tryRegister, Math.min(5000, 500 + attempts * 650));
+        state.management.timer = scheduleLifecycleTimeout(tryRegister, Math.min(5000, 500 + attempts * 650));
         try { state.management.timer?.unref?.(); } catch (_) {}
       }
     };
-    state.management.timer = setTimeout(tryRegister, 300);
+    state.management.timer = scheduleLifecycleTimeout(tryRegister, 300);
     try { state.management.timer?.unref?.(); } catch (_) {}
   };
 
@@ -3364,7 +3871,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         if (!character && Number.isInteger(charIndex) && charIndex >= 0 && typeof api?.getCharacterFromIndex === 'function') character = await api.getCharacterFromIndex(charIndex);
         if (!chat && Number.isInteger(charIndex) && charIndex >= 0 && Number.isInteger(chatIndex) && chatIndex >= 0 && typeof api?.getChatFromIndex === 'function') chat = await api.getChatFromIndex(charIndex, chatIndex);
         if (!db && typeof api?.getDatabase === 'function') db = await api.getDatabase(['selectedPersona', 'personas']);
-      } catch (_) {}
+      } catch (error) { reportStorageFailure('storage.scope.registry.op', error); }
     }
     character = character && typeof character === 'object' ? character : {};
     chat = chat && typeof chat === 'object' ? chat : {};
@@ -3408,7 +3915,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           if (store?.getItem && store?.setItem) return store;
         }
         if (api?.safeLocalStorage?.getItem && api?.safeLocalStorage?.setItem) return api.safeLocalStorage;
-      } catch (_) {}
+      } catch (error) { reportStorageFailure('storage.device.store.probe', error); }
     }
     return null;
   };
@@ -3451,33 +3958,53 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     return result;
   };
 
-  const writeScopeRegistryLocal = async registryValue => {
-    const registry = parseScopeRegistry(registryValue);
-    registry.updatedAt = Date.now();
-    const payload = JSON.stringify(registry);
-    let success = false;
-    const pluginStore = rawPluginStorage();
-    if (pluginStore?.setItem) {
-      try {
-        const result = await pluginStore.setItem(SCOPE_ROUTING_LOCAL_KEY, payload);
-        if (result !== false) {
-          const readback = await pluginStore.getItem?.(SCOPE_ROUTING_LOCAL_KEY);
-          success = String(readback || '') === payload;
-        }
-      } catch (_) {}
-    }
-    const deviceStore = await rawDeviceStorage().catch(() => null);
-    if (deviceStore?.setItem) {
-      try { await deviceStore.setItem(SCOPE_ROUTING_LOCAL_KEY, payload); success = true; } catch (_) {}
-    }
-    if (!success) {
-      const error = new Error('memory_suite_scope_routing_storage_unavailable');
-      error.code = 'MEMORY_SUITE_SCOPE_ROUTING_STORAGE_UNAVAILABLE';
-      throw error;
-    }
-    state.scopeRouting.registry = registry;
-    state.scopeRouting.registryLoaded = true;
-    return registry;
+  // Diagnostic hooks belong to the shared source, not hand-edited embeds.
+  const reportStorageFailure = (tag, error) => {
+    try { globalThis.__librarianDiag?.(namespace, tag, error); } catch (_) {}
+  };
+  let scopeRegistryWriteTail = Promise.resolve();
+  const writeScopeRegistryLocal = registryValue => {
+    const requested = parseScopeRegistry(registryValue);
+    const task = scopeRegistryWriteTail.catch(() => {}).then(async () => {
+      // A queued caller may have loaded its snapshot before another scope saved.
+      // Merge after acquiring the write turn so unrelated entries survive.
+      const registry = mergeScopeRegistries(await loadScopeRegistry(true, false), requested);
+      registry.updatedAt = Date.now();
+      const payload = JSON.stringify(registry);
+      let success = false;
+      const pluginStore = rawPluginStorage();
+      if (pluginStore?.setItem) {
+        try {
+          const result = await pluginStore.setItem(SCOPE_ROUTING_LOCAL_KEY, payload);
+          if (result !== false) {
+            const readback = await pluginStore.getItem?.(SCOPE_ROUTING_LOCAL_KEY);
+            success = String(readback || '') === payload;
+          }
+        } catch (error) { reportStorageFailure('scope.routing.plugin.write', error); }
+      }
+      const deviceStore = await rawDeviceStorage().catch(() => null);
+      if (deviceStore?.setItem) {
+        try {
+          const result = await deviceStore.setItem(SCOPE_ROUTING_LOCAL_KEY, payload);
+          const readback = await deviceStore.getItem?.(SCOPE_ROUTING_LOCAL_KEY);
+          if (result !== false && String(readback || '') === payload) success = true;
+        } catch (error) { reportStorageFailure('scope.routing.device.write', error); }
+      }
+      if (!success) {
+        state.scopeRouting.registry = null;
+        state.scopeRouting.registryLoaded = false;
+        state.scopeRouting.routeCache.clear();
+        const error = new Error('memory_suite_scope_routing_storage_unavailable');
+        error.code = 'MEMORY_SUITE_SCOPE_ROUTING_STORAGE_UNAVAILABLE';
+        throw error;
+      }
+      state.scopeRouting.registry = registry;
+      state.scopeRouting.registryLoaded = true;
+      state.scopeRouting.routeCache.clear();
+      return registry;
+    });
+    scopeRegistryWriteTail = task;
+    return task;
   };
 
   const loadScopeRegistry = async (force = false, tryServer = false) => {
@@ -3486,18 +4013,19 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const task = (async () => {
       let pluginRaw = null, deviceRaw = null, serverRaw = null;
       const pluginStore = rawPluginStorage();
-      try { pluginRaw = await pluginStore?.getItem?.(SCOPE_ROUTING_LOCAL_KEY); } catch (_) {}
+      try { pluginRaw = await pluginStore?.getItem?.(SCOPE_ROUTING_LOCAL_KEY); } catch (error) { reportStorageFailure('storage.scope.route.read.plugin', error); }
       const deviceStore = await rawDeviceStorage().catch(() => null);
-      try { deviceRaw = await deviceStore?.getItem?.(SCOPE_ROUTING_LOCAL_KEY); } catch (_) {}
+      try { deviceRaw = await deviceStore?.getItem?.(SCOPE_ROUTING_LOCAL_KEY); } catch (error) { reportStorageFailure('storage.scope.route.read.device', error); }
       if (tryServer && !pluginRaw && !deviceRaw) {
         try {
           const remote = await remoteGet('plugin', SCOPE_ROUTING_SERVER_KEY, { allowPluginOnly: true });
           if (remote.exists === true) serverRaw = remote.value;
-        } catch (_) {}
+        } catch (error) { reportStorageFailure('storage.scope.route.read.server', error); }
       }
       const registry = mergeScopeRegistries(serverRaw, pluginRaw, deviceRaw);
       state.scopeRouting.registry = registry;
       state.scopeRouting.registryLoaded = true;
+      state.scopeRouting.routeCache.clear();
       return registry;
     })();
     state.scopeRouting.registryLoading = task;
@@ -3532,6 +4060,90 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       setStatus('scope_routes_server_unavailable', error?.message || error);
       return null;
     }
+  };
+
+  const compactRestoreEvidence = value => {
+    if (value == null) return null;
+    try {
+      const json = JSON.stringify(value);
+      if (json.length <= 12000) return JSON.parse(json);
+      return { truncated:true, preview:json.slice(0, 11000) };
+    } catch (_) { return { preview:compact(value, 1000) }; }
+  };
+
+  const recoveryLockForScope = async scopeInput => {
+    const scope = normalizeScopeDescriptor(scopeInput || await resolveCurrentScope(false));
+    if (!scope.scopeId) return null;
+    const registry = await loadScopeRegistry(false, false);
+    const row = registry?.entries?.[scope.scopeId];
+    const lock = row?.recoveryRequired;
+    if (!lock) return null;
+    return lock && typeof lock === 'object'
+      ? { ...lock, scopeId:scope.scopeId }
+      : { schema:'memory-suite.recovery-required.v1', scopeId:scope.scopeId, required:true, reason:String(row?.recoveryReason || 'restore_failed') };
+  };
+
+  const persistRecoveryRequired = async (scopeInput, error, evidence = null) => {
+    const scope = normalizeScopeDescriptor(scopeInput || await resolveCurrentScope(true));
+    if (!scope.scopeId) throw error;
+    const registry = await loadScopeRegistry(true, true);
+    const now = Date.now();
+    const previous = registry.entries[scope.scopeId] || {};
+    const validation = compactRestoreEvidence(error?.validation || error?.result?.validation || evidence?.validation || null);
+    const metrics = compactRestoreEvidence(error?.metrics || error?.result?.metrics || evidence?.metrics || null);
+    const lock = {
+      schema:'memory-suite.recovery-required.v1', required:true, namespace, pluginId,
+      scopeId:scope.scopeId, scopeLabel:scope.label, at:now,
+      code:String(error?.code || 'MEMORY_SUITE_SCOPE_RESTORE_INCOMPLETE'),
+      reason:compact(error?.message || error || 'restore_failed', 900),
+      validation, metrics,
+      evidence:compactRestoreEvidence(evidence || error?.result || null)
+    };
+    registry.entries[scope.scopeId] = {
+      ...previous, ...scope, mode:MODE_SERVER_ONLY, recoveryRequired:lock,
+      recoveryState:'required', recoveryReason:lock.reason, updatedAt:now, source:'restore_failed_recovery_required'
+    };
+    registry.legacyGlobalModeImported = true;
+    const saved = await writeScopeRegistryLocal(registry);
+    state.scopeRouting.transientModes.delete(scope.scopeId);
+    state.config = { ...state.config, at:Date.now(), mode:MODE_SERVER_ONLY };
+    await synchronizeScopeRegistryToServer(saved);
+    setStatus('recovery_required', lock.reason, { scopeId:scope.scopeId, scopeLabel:scope.label, mode:MODE_SERVER_ONLY, recoveryRequired:true, recovery:lock });
+    return lock;
+  };
+
+  const clearRecoveryRequired = async scopeInput => {
+    const scope = normalizeScopeDescriptor(scopeInput || await resolveCurrentScope(true));
+    if (!scope.scopeId) return null;
+    const registry = await loadScopeRegistry(true, false);
+    const previous = registry.entries[scope.scopeId];
+    if (!previous?.recoveryRequired) return null;
+    const next = { ...previous, ...scope, updatedAt:Date.now(), source:'restore_verified_recovery_cleared' };
+    delete next.recoveryRequired;
+    delete next.recoveryState;
+    delete next.recoveryReason;
+    registry.entries[scope.scopeId] = next;
+    const saved = await writeScopeRegistryLocal(registry);
+    await synchronizeScopeRegistryToServer(saved);
+    setStatus('recovery_cleared', '', { scopeId:scope.scopeId, scopeLabel:scope.label, mode:normalizeMode(next.mode), recoveryRequired:false });
+    return { scopeId:scope.scopeId, cleared:true, at:Date.now() };
+  };
+
+  const recoveryRequiredError = (scope, lock, action = 'operation') => {
+    const error = new Error(`memory_suite_recovery_required:${scope?.scopeId || ''}:${action}`);
+    error.code = 'MEMORY_SUITE_RECOVERY_REQUIRED';
+    error.scope = scope;
+    error.recovery = lock;
+    error.recoveryLock = lock;
+    error.userMessage = '서버에서 pluginStorage 복구가 완전히 검증되지 않았습니다. 서버 단독을 유지한 채 복구를 다시 완료해 주세요.';
+    return error;
+  };
+
+  const assertRecoveryActionAllowed = async (scopeInput, action = 'operation') => {
+    const scope = normalizeScopeDescriptor(scopeInput || await resolveCurrentScope(true));
+    const lock = await recoveryLockForScope(scope);
+    if (lock) throw recoveryRequiredError(scope, lock, action);
+    return scope;
   };
 
   const resolveCurrentScope = async (force = false) => {
@@ -3583,6 +4195,34 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const mode = VALID_MODES.has(transient) ? transient : normalizeMode(stored?.mode || MODE_PLUGIN_ONLY);
     return { scope: stored ? normalizeScopeDescriptor(stored, scope.scopeId) : scope, mode, modeLabel: modeLabel(mode), explicit: !!stored };
   };
+  const scopeExecutionPolicyFromModeState = modeState => {
+    const storageMode = normalizeMode(modeState?.mode || MODE_PLUGIN_ONLY);
+    const serverBacked = storageMode !== MODE_PLUGIN_ONLY;
+    const scope = normalizeScopeDescriptor(modeState?.scope || null);
+    return Object.freeze({
+      schema: 'memory-suite.scope-execution-policy.v1',
+      namespace,
+      pluginId,
+      scope,
+      scopeId: scope.scopeId || '',
+      storageMode,
+      storageModeLabel: modeLabel(storageMode),
+      configuredRoute: serverBacked ? 'server' : 'local',
+      computeMode: serverBacked ? 'prefer_server' : 'local',
+      lockedByStorageMode: true,
+      serverBacked
+    });
+  };
+  const getScopeExecutionPolicy = async (scopeInput = null, policyOptions = {}) => {
+    const optionsValue = policyOptions && typeof policyOptions === 'object' ? policyOptions : {};
+    try {
+      return scopeExecutionPolicyFromModeState(await readScopeMode(scopeInput, optionsValue.force === true));
+    } catch (error) {
+      const scope = normalizeScopeDescriptor(scopeInput || state.scopeRouting.current || null);
+      setStatus('scope_execution_policy_local_fallback', error?.message || error, { scopeId: scope.scopeId || '', mode: MODE_PLUGIN_ONLY });
+      return scopeExecutionPolicyFromModeState({ scope, mode: MODE_PLUGIN_ONLY });
+    }
+  };
 
   const persistScopedMode = async (modeValue, scopeInput = null, persistOptions = {}) => {
     const target = normalizeMode(modeValue);
@@ -3592,13 +4232,16 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       error.code = 'MEMORY_SUITE_SCOPE_UNAVAILABLE';
       throw error;
     }
-    const registry = await loadScopeRegistry(true, false);
+    const registry = parseScopeRegistry(await loadScopeRegistry(true, false));
     registry.entries[scope.scopeId] = { ...(registry.entries[scope.scopeId] || {}), ...scope, mode: target, updatedAt: Date.now(), source: String(persistOptions.source || 'user_scope_setting') };
     registry.legacyGlobalModeImported = true;
     const saved = await writeScopeRegistryLocal(registry);
     state.scopeRouting.transientModes.delete(scope.scopeId);
     state.config = { ...state.config, at: Date.now(), mode: target };
-    void synchronizeScopeRegistryToServer(saved);
+    // Entering plugin-only is a hard network boundary.  Do not immediately
+    // reconnect merely to publish the route registry that disabled the server.
+    // A later explicit connection/sync action can publish it if requested.
+    if (target !== MODE_PLUGIN_ONLY) void synchronizeScopeRegistryToServer(saved);
     setStatus('scope_mode_changed', '', { scopeId: scope.scopeId, scopeLabel: scope.label, mode: target, modeLabel: modeLabel(target) });
     return { scope, mode: target, modeLabel: modeLabel(target), registry: saved };
   };
@@ -3728,8 +4371,28 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const scopedServerIntegrity = async () => await remoteIntegrity({ allowPluginOnly: true });
 
   const scopedGet = async (space, key, legacyGet = null, legacySet = null, legacyRemove = null) => {
+    // Normal proxied storage follows the mode of the currently open scope.
+    // This fast path must run before key classification: a shared key or a key
+    // belonging to another server-backed scope must not pierce plugin-only.
+    const currentMode = (await readScopeMode(await resolveCurrentScope(false), false)).mode;
+    if (currentMode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
     const route = await resolveScopedRoute(space, key);
     if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
+    if (flashbackWriterAlias(route.remoteKey)) {
+      // Server-selected Flashback corpora never accept a local-ahead mirror as
+      // canonical. Import only an absent server key, under the writer fence.
+      const row = await remoteGet(space, route.remoteKey, { allowPluginOnly: true });
+      if (row.exists === true) return await routeMergeValue(route, row.value, null);
+      if (row.tombstone === true) return null;
+      const local = typeof legacyGet === 'function' ? await legacyGet() : null;
+      const projected = isNullishStorageValue(local) ? null : await routeProjectValue(route, local);
+      if (isNullishStorageValue(projected)) return null;
+      try { await remoteMutate('set', space, route.remoteKey, projected, { allowPluginOnly: true, expectedRevision: 0 }); }
+      catch (error) { if (error?.status !== 409) throw error; }
+      const imported = await remoteGet(space, route.remoteKey, { allowPluginOnly: true });
+      if (imported.exists !== true) throw new Error('FLASHBACK_SERVER_IMPORT_UNCONFIRMED');
+      return await routeMergeValue(route, imported.value, null);
+    }
     if (route.mode === MODE_MIRROR) {
       const localValue = typeof legacyGet === 'function' ? await legacyGet() : null;
       const config = await readConfig();
@@ -3794,9 +4457,18 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
 
   const scopedSet = async (space, key, value, legacySet = null) => {
+    const currentMode = (await readScopeMode(await resolveCurrentScope(false), false)).mode;
+    if (currentMode === MODE_PLUGIN_ONLY) return typeof legacySet === 'function' ? await legacySet(value) : false;
     const route = await resolveScopedRoute(space, key);
     if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacySet === 'function' ? await legacySet(value) : false;
     const projected = await routeProjectValue(route, value);
+    if (flashbackWriterAlias(route.remoteKey)) {
+      await serializeMutation(space, route.remoteKey, () => remoteMutate('set', space, route.remoteKey, projected, { allowPluginOnly: true }));
+      if (route.mode === MODE_MIRROR && typeof legacySet === 'function') {
+        try { await legacySet(value); } catch (error) { setStatus('server_durable_mirror_pending', error?.message || error); }
+      }
+      return true;
+    }
     if (route.mode === MODE_MIRROR) {
       const localOk = typeof legacySet === 'function' ? await legacySet(value) : false;
       if (!localOk) return false;
@@ -3814,8 +4486,17 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
 
   const scopedRemove = async (space, key, legacyGet = null, legacySet = null, legacyRemove = null) => {
+    const currentMode = (await readScopeMode(await resolveCurrentScope(false), false)).mode;
+    if (currentMode === MODE_PLUGIN_ONLY) return typeof legacyRemove === 'function' ? await legacyRemove() : false;
     const route = await resolveScopedRoute(space, key);
     if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacyRemove === 'function' ? await legacyRemove() : false;
+    if (flashbackWriterAlias(route.remoteKey)) {
+      await serializeMutation(space, route.remoteKey, () => remoteMutate('remove', space, route.remoteKey, null, { allowPluginOnly: true }));
+      if (route.mode === MODE_MIRROR) {
+        try { await routeRemoveLocal(route, legacyGet, legacySet, legacyRemove); } catch (error) { setStatus('server_durable_mirror_pending', error?.message || error); }
+      }
+      return true;
+    }
     if (route.mode === MODE_MIRROR) {
       try { await serializeMutation(space, route.remoteKey, () => remoteMutate('remove', space, route.remoteKey, null, { allowPluginOnly: true })); }
       catch (error) { setStatus('mirror_delete_blocked', error?.message || error, { scopeId: route.scopeId, key: compact(key, 160), space }); return false; }
@@ -3829,8 +4510,12 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const scopedKeys = async (space, prefix = '', legacyKeysFn = null) => {
     const currentScope = await resolveCurrentScope(false);
+    const currentMode = (await readScopeMode(currentScope, false)).mode;
     const legacy = typeof legacyKeysFn === 'function' ? await legacyKeysFn() : [];
     const legacyList = Array.isArray(legacy) ? legacy.map(String).filter(Boolean) : [];
+    // Do not inspect foreign routes or enumerate the server while the active
+    // scope is plugin-only.  Explicit bridge.serverKeys() remains available.
+    if (currentMode === MODE_PLUGIN_ONLY) return [...new Set(legacyList)];
     const visible = [];
     let requiresServer = false;
     for (const key of legacyList) {
@@ -3843,7 +4528,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     let remote = { keys: [], tombstones: [] };
     try { remote = await remoteKeys(space, prefix, { allowPluginOnly: true }); }
     catch (error) {
-      if (requiresServer && (await readScopeMode(currentScope)).mode === MODE_SERVER_ONLY) throw error;
+      if (requiresServer && currentMode === MODE_SERVER_ONLY) throw error;
       return [...new Set(visible)];
     }
     const tombstones = new Set();
@@ -3897,11 +4582,11 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           failed:Math.max(1, Number(error?.result?.failures?.length || 0) || 1), reason:compact(error?.message || error, 300), scheduled:false
         };
         if (!keyEnumerationMissing && retryableSyncError(error)) {
-          setTimeout(() => scheduleScopedAutomaticMigration(legacy, space), migrationRetryMs);
+          scheduleLifecycleTimeout(() => scheduleScopedAutomaticMigration(legacy, space), migrationRetryMs);
         }
       }
     };
-    const timer = setTimeout(() => { void run(); }, migrationDelayMs);
+    const timer = scheduleLifecycleTimeout(() => { void run(); }, migrationDelayMs);
     try { timer?.unref?.(); } catch (_) {}
   };
 
@@ -3935,7 +4620,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     });
     cache.set(legacy, proxy);
     scheduleScopedAutomaticMigration(legacy, space);
-    if (space === 'plugin') setTimeout(() => {
+    if (space === 'plugin') scheduleLifecycleTimeout(() => {
       void (async () => {
         const scope = await resolveCurrentScope(false);
         const modeState = await readScopeMode(scope, false);
@@ -3974,6 +4659,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const scope = normalizeScopeDescriptor(syncOptions.scope || await resolveCurrentScope(true));
     if (!scope.scopeId) throw new Error('memory_suite_current_scope_unavailable');
     const onProgress = typeof syncOptions.onProgress === 'function' ? syncOptions.onProgress : null;
+    const dryRun = syncOptions.dryRun === true;
     const progress = {
       schema: 'memory-suite.sync-progress.v2', namespace, space, scopeId: scope.scopeId, scopeLabel: scope.label,
       phase: 'integrity_before', currentAction: '서버 무결성 확인', currentKey: '', totalItems: 0, processedItems: 0,
@@ -4007,7 +4693,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const result = {
       schema: 'memory-suite.scope-sync.v1', namespace, space, scope, startedAt: progress.startedAt,
       totalItems: progress.totalItems, processedItems: 0, processedBytes: 0, transferredBytes: 0,
-      uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0, conflicts: [], failures: [],
+      uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
+      plannedUploaded: 0, plannedRestored: 0, dryRun, conflicts: [], failures: [],
       integrityBefore, integrityAfter: null
     };
     for (const row of localRows) {
@@ -4021,18 +4708,42 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         else {
           const remote = await remoteGet(space, row.route.remoteKey, { allowPluginOnly: true });
           if (remote.exists === true && jsonComparable(remote.value) === jsonComparable(projected)) { result.matched += 1; action = '일치 확인'; }
-          else if (remote.tombstone === true && syncOptions.allowOverwrite === false) {
-            result.conflicts.push({ key: row.key, remoteKey: row.route.remoteKey, reason: 'server_tombstone', localPreserved: true });
-            action = '삭제 충돌 보존';
+          else if (flashbackWriterAlias(row.route.remoteKey) && remote.exists === true) {
+            result.conflicts.push({ key:row.key, remoteKey:row.route.remoteKey, reason:'flashback_server_canonical_mismatch', localPreserved:true, serverPreserved:true });
+            action = '서버 정본과 로컬 차이 보존 · 복구 확인 필요';
+          }
+          else if (remote.tombstone === true && syncOptions.resurrectTombstones !== true) {
+            if (!dryRun && syncOptions.allowOverwrite !== false && syncOptions.restoreMissingLocal === true) {
+              const removed = await routeRemoveLocal(
+                row.route,
+                async()=>legacyRead(legacy,row.key),
+                async next=>legacyWriteVerified(legacy,row.key,next),
+                async()=>legacyRemoveVerified(legacy,row.key)
+              );
+              if (!removed) throw new Error('pluginstorage_tombstone_apply_failed');
+              result.removedByTombstone += 1;
+              action = '서버 삭제 상태 반영';
+            } else {
+              result.conflicts.push({ key: row.key, remoteKey: row.route.remoteKey, reason: 'server_tombstone', localPreserved: true, serverPreserved:true });
+              action = '삭제 충돌 보존';
+            }
+          } else if (syncOptions.allowOverwrite === false && remote.exists === true) {
+            const reason = 'server_value_mismatch';
+            result.conflicts.push({ key: row.key, remoteKey: row.route.remoteKey, reason, localPreserved: true, serverPreserved:true });
+            action = '값 충돌 보존';
+          } else if (dryRun) {
+            result.plannedUploaded += 1;
+            action = remote.exists === true ? '서버 덮어쓰기 예정' : '서버 업로드 예정';
           } else {
-            await remoteMutate('set', space, row.route.remoteKey, projected, { allowPluginOnly: true });
+            await remoteMutate('set', space, row.route.remoteKey, projected, { allowPluginOnly: true,
+              ...(flashbackWriterAlias(row.route.remoteKey) ? { expectedRevision:remote.revision || 0 } : {}) });
             result.uploaded += 1; result.transferredBytes += bytes; action = '서버 저장·검증 완료';
           }
         }
       } catch (error) { result.failures.push({ key: row.key, error: compact(error?.message || error, 240) }); action = '실패'; }
       finally {
         result.processedItems += 1; result.processedBytes += bytes;
-        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length });
         report('sync_local', { currentKey: row.key, currentAction: action });
       }
     }
@@ -4045,18 +4756,22 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         if (remote.exists === true) {
           const current = await legacyRead(legacy, decoded.logicalKey);
           const merged = await routeMergeValue(route, remote.value, current);
-          if (!await legacyWriteVerified(legacy, decoded.logicalKey, merged)) throw new Error('pluginstorage_restore_failed');
-          result.restored += 1; result.transferredBytes += bytes; action = '복구·readback 완료';
+          if (dryRun) {
+            result.plannedRestored += 1; action = '복구 가능 확인';
+          } else {
+            if (!await legacyWriteVerified(legacy, decoded.logicalKey, merged)) throw new Error('pluginstorage_restore_failed');
+            result.restored += 1; result.transferredBytes += bytes; action = '복구·readback 완료';
+          }
         }
       } catch (error) { result.failures.push({ key: remoteKey, error: compact(error?.message || error, 240) }); action = '복구 실패'; }
       finally {
         result.processedItems += 1; result.processedBytes += bytes;
-        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length });
         report('sync_remote', { currentKey: remoteKey, currentAction: action });
       }
     }
-    report('integrity_after', { currentKey: '', currentAction: '최종 무결성 확인', message: '현재 스코프 동기화 후 서버 DATA 무결성을 확인하고 있습니다.' });
-    result.integrityAfter = await remoteIntegrity({ allowPluginOnly: true });
+    report('integrity_after', { currentKey: '', currentAction: dryRun ? '사전검사 완료' : '최종 무결성 확인', message: dryRun ? '쓰기 없는 모드 전환 사전검사를 완료했습니다.' : '현재 스코프 동기화 후 서버 DATA 무결성을 확인하고 있습니다.' });
+    result.integrityAfter = dryRun ? integrityBefore : await remoteIntegrity({ allowPluginOnly: true });
     result.ok = result.failures.length === 0 && result.conflicts.length === 0;
     report(result.ok ? 'scope_complete' : 'scope_incomplete', { currentKey: '', currentAction: result.ok ? '스코프 동기화 완료' : '확인 필요', message: result.ok ? `${scope.label || scope.scopeId} 동기화를 완료했습니다.` : `실패 ${result.failures.length} · 충돌 ${result.conflicts.length}` });
     if (!result.ok) {
@@ -4068,76 +4783,372 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const scopedSynchronizeAll = async (syncOptions = {}) => {
     const scope = normalizeScopeDescriptor(syncOptions.scope || await resolveCurrentScope(true));
-    const result = { schema: 'memory-suite.scope-sync-all.v1', namespace, scope, plugin: null, local: null, uploaded: 0, restored: 0, matched: 0, failures: [], totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0 };
+    if (syncOptions.allowRecoveryRequired !== true) await assertRecoveryActionAllowed(scope, 'synchronize');
+    const result = { schema: 'memory-suite.scope-sync-all.v1', namespace, scope, plugin: null, local: null, uploaded: 0, restored: 0, matched: 0, removedByTombstone:0, plannedUploaded:0, plannedRestored:0, failures: [], totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0 };
     const forward = progress => { try { syncOptions.onProgress?.(progress); } catch (_) {} };
     if (state.legacy.plugin) {
       result.plugin = await scopedSynchronizeSpace(state.legacy.plugin, 'plugin', { ...syncOptions, scope, onProgress: forward });
-      for (const field of ['uploaded','restored','matched','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.plugin?.[field] || 0);
+      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.plugin?.[field] || 0);
     }
     if (state.legacy.local && typeof state.legacy.local?.keys === 'function') {
       result.local = await scopedSynchronizeSpace(state.legacy.local, 'local', { ...syncOptions, scope, onProgress: forward });
-      for (const field of ['uploaded','restored','matched','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.local?.[field] || 0);
+      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.local?.[field] || 0);
     }
     result.ok = true;
     return result;
   };
 
+  const restoreCandidateSummary = row => ({
+    space:String(row?.space || ''), logicalKey:String(row?.logicalKey || ''), remoteKey:String(row?.remoteKey || ''),
+    kind:String(row?.kind || row?.route?.kind || 'scope'), dependency:row?.dependency === true,
+    explicitDependency:row?.explicitDependency === true, dependencyReason:String(row?.dependencyReason || ''),
+    valueBytes:Math.max(0, Number(row?.valueBytes || 0) || 0)
+  });
+
+  const collectScopedRestoreInventory = async (space, scope) => {
+    const listing = await remoteKeys(space, '', { allowPluginOnly:true });
+    const records = new Map((Array.isArray(listing?.records) ? listing.records : []).map(row => [String(row?.key || ''), row]));
+    const candidates = [], tombstones = [], seenValues = new Set(), seenTombstones = new Set();
+    const classify = async (remoteKey, tombstone = false) => {
+      const decoded = scopedRemoteKeyInfo(remoteKey);
+      const route = await resolveScopedRoute(space, decoded.logicalKey, { scope, noCache:true });
+      if (!route?.routed || route.kind === 'global') return;
+      const dependency = route.kind === 'shared' && route.includeInScopeSync === true;
+      const owned = decoded.scopeId
+        ? decoded.scopeId === scope.scopeId
+        : scopeRouteMatches(route, scope);
+      if (!owned && !dependency) return;
+      if (route.remoteKey !== remoteKey) return;
+      const row = {
+        space, remoteKey, logicalKey:decoded.logicalKey, route,
+        kind:route.kind, dependency, valueBytes:Math.max(0, Number(records.get(remoteKey)?.valueBytes || 0) || 0)
+      };
+      const seen = tombstone ? seenTombstones : seenValues;
+      if (seen.has(remoteKey)) return;
+      seen.add(remoteKey);
+      (tombstone ? tombstones : candidates).push(row);
+    };
+    for (const remoteKey of Array.isArray(listing?.keys) ? listing.keys.map(String) : []) await classify(remoteKey, false);
+    for (const remoteKey of Array.isArray(listing?.tombstones) ? listing.tombstones.map(String) : []) await classify(remoteKey, true);
+    return {
+      schema:'memory-suite.scope-restore-inventory.v1', namespace, space, scope,
+      listing, candidates, tombstones,
+      scopeCandidates:candidates.filter(row => !row.dependency),
+      dependencyCandidates:candidates.filter(row => row.dependency)
+    };
+  };
+
+  const expandRestoreDependencies = async (inventories, scope) => {
+    if (!resolveRestoreDependencies) return { dependencies:[], warnings:[], metrics:{} };
+    const initialCandidates = [
+      ...inventories.plugin.candidates.map(restoreCandidateSummary),
+      ...inventories.local.candidates.map(restoreCandidateSummary)
+    ];
+    let raw;
+    try {
+      raw = await resolveRestoreDependencies({
+        namespace, pluginId, pluginVersion, scope, serverCandidates:initialCandidates,
+        inventories:{
+          plugin:{
+            keys:Array.isArray(inventories.plugin.listing?.keys)?inventories.plugin.listing.keys.map(String):[],
+            tombstones:Array.isArray(inventories.plugin.listing?.tombstones)?inventories.plugin.listing.tombstones.map(String):[],
+            candidates:inventories.plugin.candidates.map(restoreCandidateSummary)
+          },
+          local:{
+            keys:Array.isArray(inventories.local.listing?.keys)?inventories.local.listing.keys.map(String):[],
+            tombstones:Array.isArray(inventories.local.listing?.tombstones)?inventories.local.listing.tombstones.map(String):[],
+            candidates:inventories.local.candidates.map(restoreCandidateSummary)
+          }
+        },
+        serverRead:async (spaceValue,remoteKey)=>await remoteGet(String(spaceValue||'plugin'),String(remoteKey||''),{allowPluginOnly:true}),
+        serverList:async (spaceValue='plugin',prefix='')=>await remoteKeys(String(spaceValue||'plugin'),String(prefix||''),{allowPluginOnly:true})
+      });
+    } catch (cause) {
+      const error = new Error(`memory_suite_restore_dependency_resolver_failed:${compact(cause?.message || cause, 500)}`);
+      error.code = 'MEMORY_SUITE_RESTORE_DEPENDENCY_RESOLUTION_FAILED'; error.cause = cause; throw error;
+    }
+    const source = Array.isArray(raw) ? { dependencies:raw } : (raw && typeof raw === 'object' ? raw : { dependencies:[] });
+    const dependencies = Array.isArray(source.dependencies) ? source.dependencies : [];
+    const added = [];
+    for (const dependencyRaw of dependencies) {
+      const dependency = dependencyRaw && typeof dependencyRaw === 'object' ? dependencyRaw : { remoteKey:dependencyRaw };
+      const space = String(dependency.space || 'plugin') === 'local' ? 'local' : 'plugin';
+      const remoteKey = String(dependency.remoteKey || dependency.key || '').trim();
+      const inventory = inventories[space];
+      if (!remoteKey) continue;
+      const available = new Set(Array.isArray(inventory.listing?.keys) ? inventory.listing.keys.map(String) : []);
+      if (!available.has(remoteKey)) {
+        if (dependency.optional === true) continue;
+        const error = new Error(`memory_suite_restore_dependency_missing:${space}:${remoteKey}`);
+        error.code = 'MEMORY_SUITE_RESTORE_DEPENDENCY_MISSING';
+        error.dependency = { space, remoteKey, reason:String(dependency.reason || '') };
+        throw error;
+      }
+      const decoded = scopedRemoteKeyInfo(remoteKey);
+      const logicalKey = String(dependency.logicalKey || decoded.logicalKey || '').trim();
+      if (!logicalKey || !matchesRoute(space, logicalKey)) {
+        const error = new Error(`memory_suite_restore_dependency_not_owned:${space}:${logicalKey || remoteKey}`);
+        error.code = 'MEMORY_SUITE_RESTORE_DEPENDENCY_NOT_OWNED'; throw error;
+      }
+      if (inventory.candidates.some(row => row.remoteKey === remoteKey)) continue;
+      const route = await resolveScopedRoute(space, logicalKey, { scope, noCache:true });
+      if (!route?.routed || route.kind === 'global') {
+        const error = new Error(`memory_suite_restore_dependency_route_invalid:${space}:${logicalKey}`);
+        error.code = 'MEMORY_SUITE_RESTORE_DEPENDENCY_NOT_OWNED'; throw error;
+      }
+      const records = new Map((Array.isArray(inventory.listing?.records)?inventory.listing.records:[]).map(row=>[String(row?.key||''),row]));
+      const row = {
+        space, remoteKey, logicalKey, route, kind:route.kind, dependency:true, explicitDependency:true,
+        dependencyReason:String(dependency.reason || ''), valueBytes:Math.max(0,Number(records.get(remoteKey)?.valueBytes||0)||0)
+      };
+      inventory.candidates.push(row); inventory.dependencyCandidates.push(row); added.push(restoreCandidateSummary(row));
+    }
+    return {
+      dependencies:added,
+      warnings:compactRestoreEvidence(Array.isArray(source.warnings)?source.warnings:[]) || [],
+      metrics:compactRestoreEvidence(source.metrics || {}) || {}
+    };
+  };
+
+  const normalizeRestoreValidation = (raw, phase, space) => {
+    if (raw == null || raw === true) return { ok:true, phase, space, errors:[], warnings:[], metrics:{} };
+    if (raw === false) return { ok:false, phase, space, errors:['restore_semantic_validation_rejected'], warnings:[], metrics:{} };
+    const value = raw && typeof raw === 'object' ? raw : {};
+    const errors = Array.isArray(value.errors) ? value.errors : (value.error ? [value.error] : []);
+    const warnings = Array.isArray(value.warnings) ? value.warnings : (value.warning ? [value.warning] : []);
+    return {
+      ok:value.ok !== false && errors.length === 0, phase, space,
+      errors:compactRestoreEvidence(errors) || [], warnings:compactRestoreEvidence(warnings) || [],
+      metrics:compactRestoreEvidence(value.metrics || {}) || {}
+    };
+  };
+
+  const runRestoreValidator = async context => {
+    if (!validateRestore) {
+      if (!requireRestoreValidation) return { ok:true, phase:context.phase, space:context.space, errors:[], warnings:[], metrics:{} };
+      const error = new Error(`memory_suite_restore_semantic_validator_unavailable:${namespace}`);
+      error.code = 'MEMORY_SUITE_RESTORE_VALIDATOR_UNAVAILABLE';
+      error.validation = { ok:false, phase:context.phase, space:context.space, errors:['owner_semantic_validator_unavailable'], warnings:[], metrics:{} };
+      throw error;
+    }
+    let raw;
+    try { raw = await validateRestore(context); }
+    catch (cause) {
+      const error = new Error(`memory_suite_restore_semantic_validator_threw:${compact(cause?.message || cause, 400)}`);
+      error.code = 'MEMORY_SUITE_RESTORE_SEMANTIC_VALIDATION_FAILED';
+      error.validation = { ok:false, phase:context.phase, space:context.space, errors:[compact(cause?.message || cause, 900)], warnings:[], metrics:{} };
+      error.cause = cause;
+      throw error;
+    }
+    const validation = normalizeRestoreValidation(raw, context.phase, context.space);
+    if (!validation.ok) {
+      const error = new Error(`memory_suite_restore_semantic_validation_failed:${context.phase}:${context.space}`);
+      error.code = 'MEMORY_SUITE_RESTORE_SEMANTIC_VALIDATION_FAILED';
+      error.validation = validation;
+      error.metrics = validation.metrics;
+      throw error;
+    }
+    return validation;
+  };
+
   const scopedRestoreSpace = async (legacy, space = 'plugin', restoreOptions = {}) => {
-    if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
+    if (!legacy || typeof legacy.getItem !== 'function' || typeof legacy.setItem !== 'function') {
+      const error = new Error(`memory_suite_restore_adapter_unavailable:${space}`);
+      error.code = 'MEMORY_SUITE_RESTORE_ADAPTER_UNAVAILABLE';
+      throw error;
+    }
     const scope = normalizeScopeDescriptor(restoreOptions.scope || await resolveCurrentScope(true));
     if (!scope.scopeId) throw new Error('memory_suite_current_scope_unavailable');
     const onProgress = typeof restoreOptions.onProgress === 'function' ? restoreOptions.onProgress : null;
-    const listing = await remoteKeys(space, '', { allowPluginOnly: true });
-    const candidates = [];
-    for (const remoteKey of Array.isArray(listing.keys) ? listing.keys : []) {
-      const decoded = scopedRemoteKeyInfo(remoteKey);
-      if (decoded.scopeId === scope.scopeId) candidates.push({ remoteKey, logicalKey: decoded.logicalKey });
-      else if (!decoded.scopeId) {
-        const route = await resolveScopedRoute(space, decoded.logicalKey, { scope, noCache: true });
-        if (scopeRouteMatches(route, scope) && route.remoteKey === remoteKey) candidates.push({ remoteKey, logicalKey: decoded.logicalKey });
-      }
-    }
-    const tombstones = [];
-    for (const remoteKey of Array.isArray(listing.tombstones) ? listing.tombstones : []) {
-      const decoded = scopedRemoteKeyInfo(remoteKey);
-      if (decoded.scopeId === scope.scopeId) tombstones.push({ remoteKey, logicalKey: decoded.logicalKey });
-    }
-    const result = { schema: 'memory-suite.scope-restore.v1', namespace, space, scope, totalItems: candidates.length + tombstones.length, processedItems: 0, restored: 0, removed: 0, verified: 0, failures: [] };
+    const inventory = restoreOptions.inventory || await collectScopedRestoreInventory(space, scope);
+    const candidates = Array.isArray(inventory.candidates) ? inventory.candidates : [];
+    const tombstones = Array.isArray(inventory.tombstones) ? inventory.tombstones : [];
+    const result = {
+      schema:'memory-suite.scope-restore.v2', namespace, space, scope,
+      totalItems:candidates.length + tombstones.length, processedItems:0, restored:0, removed:0, verified:0,
+      candidateCount:candidates.length, scopeCandidateCount:candidates.filter(row=>!row.dependency).length,
+      dependencyCandidateCount:candidates.filter(row=>row.dependency).length,
+      restoredKeys:[], removedKeys:[], failures:[], coverage:[], validation:null
+    };
     const report = (phase, patch = {}) => { try { onProgress?.({ schema:'memory-suite.sync-progress.v2', namespace, space, scopeId:scope.scopeId, scopeLabel:scope.label, phase, totalItems:result.totalItems, processedItems:result.processedItems, restored:result.restored, removedByTombstone:result.removed, failureCount:result.failures.length, lastActivityAt:Date.now(), ...patch }); } catch (_) {} };
+    report('restore_preflight', { currentAction:'복구 대상과 의존 자료를 검증하고 있습니다.', candidateCount:result.candidateCount, dependencyCandidateCount:result.dependencyCandidateCount });
     for (const row of candidates) {
       try {
-        report('restore_values', { currentKey: row.logicalKey, currentAction: '서버 → pluginStorage 복구' });
-        const route = await resolveScopedRoute(space, row.logicalKey, { scope, noCache: true });
-        const remote = await remoteGet(space, row.remoteKey, { allowPluginOnly: true });
+        report('restore_values', { currentKey:row.logicalKey, currentAction:row.dependency?'서버 → 공유 의존 자료 복구':'서버 → pluginStorage 복구' });
+        const remote = await remoteGet(space, row.remoteKey, { allowPluginOnly:true });
         if (remote.exists !== true) throw new Error('server_record_missing');
         const current = await legacyRead(legacy, row.logicalKey);
-        const merged = await routeMergeValue(route, remote.value, current);
+        const merged = await routeMergeValue(row.route, remote.value, current);
         if (!await legacyWriteVerified(legacy, row.logicalKey, merged)) throw new Error('pluginstorage_restore_failed');
-        result.restored += 1; result.verified += 1;
-      } catch (error) { result.failures.push({ key: row.logicalKey, error: compact(error?.message || error, 220) }); }
-      finally { result.processedItems += 1; }
+        const readback = await legacyRead(legacy, row.logicalKey);
+        const projected = await routeProjectValue(row.route, readback);
+        if (jsonComparable(projected) !== jsonComparable(remote.value)) throw new Error('pluginstorage_restore_coverage_mismatch');
+        result.restored += 1; result.verified += 1; result.restoredKeys.push(row.logicalKey);
+        result.coverage.push({ key:row.logicalKey, remoteKey:row.remoteKey, dependency:row.dependency, verified:true });
+      } catch (error) {
+        result.failures.push({ key:row.logicalKey, remoteKey:row.remoteKey, dependency:row.dependency, error:compact(error?.message || error, 300) });
+      } finally { result.processedItems += 1; }
     }
     for (const row of tombstones) {
       try {
-        const route = await resolveScopedRoute(space, row.logicalKey, { scope, noCache: true });
-        await routeRemoveLocal(route, async () => legacyRead(legacy, row.logicalKey), async next => legacyWriteVerified(legacy, row.logicalKey, next), async () => legacyRemoveVerified(legacy, row.logicalKey));
-        result.removed += 1;
-      } catch (error) { result.failures.push({ key: row.logicalKey, error: compact(error?.message || error, 220) }); }
+        report('restore_tombstones', { currentKey:row.logicalKey, currentAction:row.dependency?'공유 의존 자료 삭제 표식 적용':'서버 삭제 표식 적용' });
+        const ok = await routeRemoveLocal(row.route, async()=>legacyRead(legacy,row.logicalKey), async next=>legacyWriteVerified(legacy,row.logicalKey,next), async()=>legacyRemoveVerified(legacy,row.logicalKey));
+        if (!ok) throw new Error('pluginstorage_tombstone_readback_failed');
+        result.removed += 1; result.removedKeys.push(row.logicalKey);
+      } catch (error) { result.failures.push({ key:row.logicalKey, remoteKey:row.remoteKey, dependency:row.dependency, error:compact(error?.message || error, 300) }); }
       finally { result.processedItems += 1; }
     }
-    result.ok = result.failures.length === 0;
-    if (!result.ok) { const error = new Error(`memory_suite_scope_restore_incomplete:${scope.scopeId}:${result.failures.length}`); error.code='MEMORY_SUITE_SCOPE_RESTORE_INCOMPLETE'; error.result=result; throw error; }
+    if (result.verified !== candidates.length) {
+      result.failures.push({ key:'*coverage*', error:`restore_coverage_incomplete:${result.verified}/${candidates.length}` });
+    }
+    if (result.failures.length === 0) {
+      try {
+        result.validation = await runRestoreValidator({
+          namespace, pluginId, pluginVersion, scope, space, phase:'space_complete',
+          serverCandidates:candidates.map(restoreCandidateSummary), restoredKeys:result.restoredKeys.slice(), removedKeys:result.removedKeys.slice(),
+          readback:async key=>await legacyRead(legacy,String(key||'')), result
+        });
+      } catch (error) {
+        result.validation = error.validation || null;
+        result.metrics = error.metrics || error.validation?.metrics || null;
+        error.result = result;
+        throw error;
+      }
+    }
+    result.ok = result.failures.length === 0 && result.validation?.ok !== false;
+    if (!result.ok) {
+      const error = new Error(`memory_suite_scope_restore_incomplete:${scope.scopeId}:${space}:${result.failures.length}`);
+      error.code='MEMORY_SUITE_SCOPE_RESTORE_INCOMPLETE'; error.result=result; throw error;
+    }
     state.management.lastResult = result;
     return result;
   };
 
   const scopedRestoreAll = async (restoreOptions = {}) => {
     const scope = normalizeScopeDescriptor(restoreOptions.scope || await resolveCurrentScope(true));
-    const result = { schema:'memory-suite.scope-restore-all.v1', namespace, scope, plugin:null, local:null, failures:[], restored:0, removed:0, totalItems:0, processedItems:0 };
+    const result = {
+      schema:'memory-suite.scope-restore-all.v2', namespace, scope, plugin:null, local:null,
+      failures:[], restored:0, removed:0, verified:0, totalItems:0, processedItems:0,
+      candidateCount:0, scopeCandidateCount:0, dependencyCandidateCount:0, validation:null, metrics:null
+    };
+    const restoreOriginals = [];
+    const restoreOriginalKeys = new Set();
+    const captureRestoreOriginals = async (space, inventory, legacy) => {
+      if (!legacy) return;
+      for (const row of [...(inventory?.candidates || []), ...(inventory?.tombstones || [])]) {
+        const logicalKey = String(row?.logicalKey || '');
+        const identity = `${space}\u0000${logicalKey}`;
+        if (!logicalKey || restoreOriginalKeys.has(identity)) continue;
+        restoreOriginalKeys.add(identity);
+        const value = await legacyRead(legacy, logicalKey);
+        restoreOriginals.push({ space, logicalKey, legacy, existed:value !== null && value !== undefined, value });
+      }
+    };
+    const rollbackRestoreOriginals = async () => {
+      const rollback = { attempted:restoreOriginals.length, restored:0, removed:0, failures:[], ok:true };
+      for (const original of restoreOriginals.slice().reverse()) {
+        try {
+          const ok = original.existed
+            ? await legacyWriteVerified(original.legacy, original.logicalKey, original.value)
+            : await legacyRemoveVerified(original.legacy, original.logicalKey);
+          if (!ok) throw new Error('pluginstorage_restore_rollback_readback_failed');
+          if (original.existed) rollback.restored += 1;
+          else rollback.removed += 1;
+        } catch (error) {
+          rollback.failures.push({ space:original.space, key:original.logicalKey, error:compact(error?.message || error, 300) });
+        }
+      }
+      rollback.ok = rollback.failures.length === 0;
+      return rollback;
+    };
     const forward = progress => { try { restoreOptions.onProgress?.(progress); } catch (_) {} };
-    if (state.legacy.plugin) { result.plugin = await scopedRestoreSpace(state.legacy.plugin, 'plugin', { ...restoreOptions, scope, onProgress:forward }); result.restored += result.plugin.restored; result.removed += result.plugin.removed; result.totalItems += result.plugin.totalItems; result.processedItems += result.plugin.processedItems; }
-    if (state.legacy.local && typeof state.legacy.local?.keys === 'function') { result.local = await scopedRestoreSpace(state.legacy.local, 'local', { ...restoreOptions, scope, onProgress:forward }); result.restored += result.local.restored; result.removed += result.local.removed; result.totalItems += result.local.totalItems; result.processedItems += result.local.processedItems; }
-    result.ok = true; return result;
+    try {
+      if (!scope.scopeId) throw new Error('memory_suite_current_scope_unavailable');
+      const pluginInventory = await collectScopedRestoreInventory('plugin', scope);
+      const localInventory = await collectScopedRestoreInventory('local', scope);
+      const inventories = { plugin:pluginInventory, local:localInventory };
+      const dependencyExpansion = await expandRestoreDependencies(inventories, scope);
+      result.dependencyExpansion = dependencyExpansion;
+      const scopeCandidates = pluginInventory.scopeCandidates.length + localInventory.scopeCandidates.length;
+      const allCandidates = pluginInventory.candidates.length + localInventory.candidates.length;
+      const allTombstones = pluginInventory.tombstones.length + localInventory.tombstones.length;
+      result.candidateCount = allCandidates;
+      result.scopeCandidateCount = scopeCandidates;
+      result.dependencyCandidateCount = pluginInventory.dependencyCandidates.length + localInventory.dependencyCandidates.length;
+      if (!state.legacy.plugin || typeof state.legacy.plugin.getItem !== 'function' || typeof state.legacy.plugin.setItem !== 'function') {
+        const error = new Error('memory_suite_restore_adapter_unavailable:plugin');
+        error.code = 'MEMORY_SUITE_RESTORE_ADAPTER_UNAVAILABLE'; throw error;
+      }
+      if ((localInventory.candidates.length || localInventory.tombstones.length)
+        && (!state.legacy.local || typeof state.legacy.local.getItem !== 'function' || typeof state.legacy.local.setItem !== 'function')) {
+        const error = new Error('memory_suite_restore_adapter_unavailable:local');
+        error.code = 'MEMORY_SUITE_RESTORE_ADAPTER_UNAVAILABLE'; throw error;
+      }
+      if (!allowEmptyRestore && scopeCandidates === 0) {
+        const error = new Error(`memory_suite_restore_snapshot_empty:${scope.scopeId}:dependencies=${result.dependencyCandidateCount},tombstones=${allTombstones}`);
+        error.code = 'MEMORY_SUITE_RESTORE_SNAPSHOT_EMPTY'; throw error;
+      }
+      await captureRestoreOriginals('plugin', pluginInventory, state.legacy.plugin);
+      await captureRestoreOriginals('local', localInventory, state.legacy.local);
+      result.plugin = await scopedRestoreSpace(state.legacy.plugin, 'plugin', { ...restoreOptions, scope, inventory:pluginInventory, onProgress:forward });
+      if (localInventory.candidates.length || localInventory.tombstones.length) {
+        result.local = await scopedRestoreSpace(state.legacy.local, 'local', { ...restoreOptions, scope, inventory:localInventory, onProgress:forward });
+      }
+      for (const spaceResult of [result.plugin, result.local].filter(Boolean)) {
+        result.restored += Number(spaceResult.restored || 0); result.removed += Number(spaceResult.removed || 0);
+        result.verified += Number(spaceResult.verified || 0); result.totalItems += Number(spaceResult.totalItems || 0);
+        result.processedItems += Number(spaceResult.processedItems || 0);
+      }
+      const candidateSummaries = [
+        ...pluginInventory.candidates.map(restoreCandidateSummary),
+        ...localInventory.candidates.map(restoreCandidateSummary)
+      ];
+      result.validation = await runRestoreValidator({
+        namespace, pluginId, pluginVersion, scope, space:'all', phase:'complete',
+        serverCandidates:candidateSummaries,
+        restoredKeys:[
+          ...(result.plugin?.restoredKeys || []).map(key=>({space:'plugin',key})),
+          ...(result.local?.restoredKeys || []).map(key=>({space:'local',key}))
+        ],
+        removedKeys:[
+          ...(result.plugin?.removedKeys || []).map(key=>({space:'plugin',key})),
+          ...(result.local?.removedKeys || []).map(key=>({space:'local',key}))
+        ],
+        readback:async (spaceValue,key)=>await legacyRead(spaceValue==='local'?state.legacy.local:state.legacy.plugin,String(key||'')),
+        result
+      });
+      result.metrics = result.validation?.metrics || {};
+      result.ok = result.verified === allCandidates && result.processedItems === (allCandidates + allTombstones) && result.validation?.ok !== false;
+      if (!result.ok) {
+        const error = new Error(`memory_suite_scope_restore_coverage_incomplete:${scope.scopeId}:${result.verified}/${allCandidates}`);
+        error.code = 'MEMORY_SUITE_SCOPE_RESTORE_INCOMPLETE'; error.result = result; throw error;
+      }
+      await clearRecoveryRequired(scope);
+      state.management.lastResult = result;
+      setStatus('restore_verified', '', { scopeId:scope.scopeId, scopeLabel:scope.label, restored:result.restored, dependencies:result.dependencyCandidateCount, recoveryRequired:false });
+      return result;
+    } catch (error) {
+      const partial = error?.result;
+      if (partial?.space === 'plugin') result.plugin = partial;
+      if (partial?.space === 'local') result.local = partial;
+      result.restored = 0; result.removed = 0; result.verified = 0; result.totalItems = 0; result.processedItems = 0;
+      for (const spaceResult of [result.plugin, result.local].filter(Boolean)) {
+        result.restored += Number(spaceResult.restored || 0);
+        result.removed += Number(spaceResult.removed || 0);
+        result.verified += Number(spaceResult.verified || 0);
+        result.totalItems += Number(spaceResult.totalItems || 0);
+        result.processedItems += Number(spaceResult.processedItems || 0);
+      }
+      if (!result.validation) result.validation = error.validation || partial?.validation || null;
+      if (!result.metrics) result.metrics = error.metrics || partial?.metrics || result.validation?.metrics || null;
+      try { result.rollback = await rollbackRestoreOriginals(); }
+      catch (rollbackError) { result.rollback = { attempted:restoreOriginals.length, restored:0, removed:0, failures:[{ error:compact(rollbackError?.message || rollbackError, 500) }], ok:false }; }
+      error.result = result;
+      if (!error.validation && result.validation) error.validation = result.validation;
+      try { error.recoveryLock = await persistRecoveryRequired(scope, error, { result, validation:error.validation || result.validation, metrics:error.metrics || result.metrics }); }
+      catch (lockError) { error.recoveryLockError = compact(lockError?.message || lockError, 500); }
+      throw error;
+    }
   };
 
   const scopedVerifyPreservation = async (_legacy = state.legacy.plugin, verifyOptions = {}) => {
@@ -4185,16 +5196,20 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const scopedSetModeSafely = async (requestedMode, operationOptions = {}) => {
     const target = normalizeMode(requestedMode);
     const scope = normalizeScopeDescriptor(operationOptions.scope || await resolveCurrentScope(true));
+    const recoveryLock = await recoveryLockForScope(scope);
+    if (recoveryLock && target !== MODE_SERVER_ONLY) throw recoveryRequiredError(scope, recoveryLock, `set_mode_${target}`);
     const current = await readScopeMode(scope, true);
     if (target === current.mode) return { changed:false, from:current.mode, to:target, scope, modeLabel:modeLabel(target) };
     if (!state.legacy.plugin) throw new Error('memory_suite_pluginstorage_unavailable');
     const onProgress = typeof operationOptions.onProgress === 'function' ? operationOptions.onProgress : null;
     try {
       if (current.mode === MODE_PLUGIN_ONLY && target !== MODE_PLUGIN_ONLY) {
-        const seeded = await scopedSynchronizeAll({ scope, allowOverwrite:false, restoreMissingLocal:target===MODE_MIRROR, onProgress });
-        state.scopeRouting.transientModes.set(scope.scopeId, MODE_MIRROR);
-        const settled = await scopedSynchronizeAll({ scope, allowOverwrite:true, restoreMissingLocal:target===MODE_MIRROR, onProgress });
-        if (!seeded.ok || !settled.ok) throw new Error('memory_suite_scope_mode_seed_failed');
+        // Discover every deterministic conflict before the first server or local write.
+        // This prevents a late key conflict from leaving an earlier key partially seeded.
+        const preflight = await scopedSynchronizeAll({ scope, dryRun:true, allowOverwrite:false, restoreMissingLocal:false, onProgress });
+        const seeded = await scopedSynchronizeAll({ scope, allowOverwrite:false, restoreMissingLocal:false, onProgress });
+        const settled = seeded;
+        if (!preflight.ok || !seeded.ok || !settled.ok) throw new Error('memory_suite_scope_mode_seed_failed');
         await remoteIntegrity({ allowPluginOnly:true });
       } else if (current.mode === MODE_MIRROR && target === MODE_SERVER_ONLY) {
         await scopedSynchronizeAll({ scope, allowOverwrite:true, restoreMissingLocal:true, onProgress });
@@ -4217,6 +5232,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const currentMode = (await readScopeMode(scope, true)).mode;
     const targetUrl = normalizeServerUrl(source.url || currentUrl);
     const targetMode = normalizeMode(source.mode || currentMode);
+    if (targetMode !== MODE_SERVER_ONLY) await assertRecoveryActionAllowed(scope, `configure_${targetMode}`);
 
     // The server URL is plugin-global while storage modes are scope-local. Moving the
     // global URL while even one scope still depends on the old server would silently
@@ -4242,20 +5258,33 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       connectionTest = await testConnection(targetUrl);
       if (!connectionTest.ok) { const error = new Error(`memory_suite_connection_test_failed:${connectionTest.error || 'unknown'}`); error.code='MEMORY_SUITE_CONNECTION_TEST_FAILED'; error.result=connectionTest; throw error; }
     }
-    if (targetUrl !== currentUrl) await persistServerUrl(targetUrl);
-    const modeResult = await scopedSetModeSafely(targetMode, { ...operationOptions, scope });
-    const from = { mode:currentMode, modeLabel:modeLabel(currentMode), url:currentUrl, scope };
-    const to = { mode:targetMode, modeLabel:modeLabel(targetMode), url:targetUrl, scope };
-    return { ok:true, scope, url:targetUrl, mode:targetMode, modeLabel:modeLabel(targetMode), from, to, transition:modeResult, modeResult, connectionTest };
+    let urlChanged = false;
+    try {
+      if (targetUrl !== currentUrl) {
+        await persistServerUrl(targetUrl);
+        urlChanged = true;
+      }
+      const modeResult = await scopedSetModeSafely(targetMode, { ...operationOptions, scope });
+      const from = { mode:currentMode, modeLabel:modeLabel(currentMode), url:currentUrl, scope };
+      const to = { mode:targetMode, modeLabel:modeLabel(targetMode), url:targetUrl, scope };
+      return { ok:true, scope, url:targetUrl, mode:targetMode, modeLabel:modeLabel(targetMode), from, to, transition:modeResult, modeResult, connectionTest };
+    } catch (error) {
+      if (urlChanged) {
+        try { await persistServerUrl(currentUrl); resetBootstrapCache(); }
+        catch (rollbackError) { error.urlRollbackError = compact(rollbackError?.message || rollbackError, 300); }
+      }
+      throw error;
+    }
   };
 
   const scopedGetConnectionSettings = async (settingsOptions = {}) => {
     const scope = normalizeScopeDescriptor(settingsOptions.scope || await resolveCurrentScope(settingsOptions.force === true));
     const modeState = await readScopeMode(scope, settingsOptions.force === true);
+    const recoveryRequired = await recoveryLockForScope(scope);
     const url = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
     state.config = { ...state.config, at: Date.now(), mode: modeState.mode, url };
     const connection = settingsOptions.test === true ? await testConnection(url) : null;
-    return { namespace, pluginId, pluginVersion, scope, scopeId:scope.scopeId, scopeLabel:scope.label, mode:modeState.mode, modeLabel:modeLabel(modeState.mode), url, defaultMode:MODE_PLUGIN_ONLY, status:{...state.status, mode:modeState.mode, scopeId:scope.scopeId, scopeLabel:scope.label}, connection, syncJob:getSyncJob() };
+    return { namespace, pluginId, pluginVersion, scope, scopeId:scope.scopeId, scopeLabel:scope.label, mode:modeState.mode, modeLabel:modeLabel(modeState.mode), executionPolicy:scopeExecutionPolicyFromModeState(modeState), url, defaultMode:MODE_PLUGIN_ONLY, recoveryRequired, status:{...state.status, mode:modeState.mode, scopeId:scope.scopeId, scopeLabel:scope.label, recoveryRequired:!!recoveryRequired}, connection, syncJob:getSyncJob() };
   };
 
   const scopedCreateBackgroundJob = async (kind, target = {}) => {
@@ -4264,6 +5293,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       const error = new Error('memory_suite_current_scope_unavailable');
       error.code = 'MEMORY_SUITE_SCOPE_UNAVAILABLE';
       throw error;
+    }
+    if (kind === 'manual_sync' || (kind === 'connection_config' && normalizeMode(target.mode) !== MODE_SERVER_ONLY)) {
+      await assertRecoveryActionAllowed(scope, kind);
     }
     const existing = state.syncJob.current;
     if (existing && !syncJobTerminal(existing.status)) {
@@ -4309,7 +5341,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const job = state.syncJob.current;
     if (!job || syncJobTerminal(job.status)) return getSyncJob();
     if (state.syncJob.promise) return state.syncJob.promise;
-    if (state.syncJob.retryTimer) { clearTimeout(state.syncJob.retryTimer); state.syncJob.retryTimer = null; }
+    if (state.syncJob.retryTimer) { clearLifecycleTimeout(state.syncJob.retryTimer); state.syncJob.retryTimer = null; }
     const scope = normalizeScopeDescriptor({
       scopeId: job.scopeId, scopeKey: job.scopeKey || job.scopeId, label: job.scopeLabel || job.scopeId
     });
@@ -4323,6 +5355,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         if (job.kind === 'connection_config') {
           result = await scopedConfigureConnection({ mode: job.targetMode, url: job.targetUrl }, { scope, onProgress: applySyncProgressToJob });
         } else if (job.kind === 'manual_sync') {
+          await assertRecoveryActionAllowed(scope, 'manual_sync');
           const mode = (await readScopeMode(scope, true)).mode;
           if (mode !== MODE_MIRROR) throw new Error('memory_suite_manual_sync_requires_mirror_mode');
           result = await scopedSynchronizeAll({ scope, allowOverwrite: true, restoreMissingLocal: true, onProgress: applySyncProgressToJob });
@@ -4340,7 +5373,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         }, { persist: 'immediate' });
         return result;
       } catch (error) {
-        if (retryableSyncError(error) && Number(state.syncJob.current?.retryCount || 0) < 120) {
+        if (retryableSyncError(error) && Number(state.syncJob.current?.retryCount || 0) < SYNC_JOB_MAX_RETRIES) {
           const retryCount = Number(state.syncJob.current?.retryCount || 0) + 1;
           const delay = SYNC_JOB_RETRY_DELAYS_MS[Math.min(SYNC_JOB_RETRY_DELAYS_MS.length - 1, retryCount - 1)];
           updateSyncJob({
@@ -4348,7 +5381,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
             message: `서버 연결이 일시적으로 끊겼습니다. ${Math.ceil(delay / 1000)}초 후 현재 스코프 작업을 이어서 확인합니다.`,
             error: compact(error?.message || error, 420), retryCount, nextRetryAt: Date.now() + delay
           }, { persist: 'immediate' });
-          state.syncJob.retryTimer = setTimeout(() => {
+          state.syncJob.retryTimer = scheduleLifecycleTimeout(() => {
             state.syncJob.retryTimer = null;
             void scopedExecuteBackgroundJob();
           }, delay);
@@ -4358,6 +5391,10 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         updateSyncJob({
           status: 'failed', phase: 'failed', currentAction: '작업 중단', currentKey: '',
           message: '작업을 완료하지 못했습니다.', error: compact(error?.message || error, 700),
+          result:compactRestoreEvidence(error?.result || null),
+          recoveryRequired:!!error?.recoveryLock, recovery:compactRestoreEvidence(error?.recoveryLock || null),
+          validation:compactRestoreEvidence(error?.validation || error?.result?.validation || null),
+          metrics:compactRestoreEvidence(error?.metrics || error?.result?.metrics || null),
           nextRetryAt: 0, finishedAt: Date.now()
         }, { persist: 'immediate' });
         throw error;
@@ -4380,6 +5417,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
   const scopedStartSynchronizationJob = async (options = {}) => {
     const scope = normalizeScopeDescriptor(options.scope || await resolveCurrentScope(true));
+    await assertRecoveryActionAllowed(scope, 'manual_sync');
     const modeState = await readScopeMode(scope, true);
     if (modeState.mode !== MODE_MIRROR) throw new Error('memory_suite_manual_sync_requires_mirror_mode');
     const url = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
@@ -4425,8 +5463,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     });
   };
 
-  const scopedDeletePluginStorageAfterVerification = async () => {
-    const scope = await resolveCurrentScope(true);
+  const scopedDeletePluginStorageAfterVerification = async (deleteOptions = {}) => {
+    const scope = normalizeScopeDescriptor(deleteOptions.scope || await resolveCurrentScope(true));
+    await assertRecoveryActionAllowed(scope, 'delete_pluginstorage');
     const checked = await scopedVerifyPreservation(state.legacy.plugin, { scope });
     await persistScopedMode(MODE_SERVER_ONLY, scope, { source:'scope_pluginstorage_delete' });
     const result = {
@@ -4497,6 +5536,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const scopedMountConnectionPanel = async (container, panelOptions = {}) => {
     if (!container || typeof container.innerHTML === 'undefined') throw new Error('memory_suite_connection_panel_container_required');
     const initial = await scopedGetConnectionSettings({ force:true });
+    const computeBridge = panelOptions.computeBridge && typeof panelOptions.computeBridge === 'object' ? panelOptions.computeBridge : null;
+    const integratesCompute = !!computeBridge;
     const rootId = `memory-suite-scope-connection-${namespace}-${Math.random().toString(36).slice(2,8)}`;
     const esc = value => safeText(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     container.innerHTML = `<div id="${rootId}" class="mscx-scope-root"><style>
@@ -4508,44 +5549,82 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       #${rootId} input[type=text],#${rootId} input[type=password]{width:100%;padding:10px 11px;border-radius:9px;border:1px solid #465a79;background:#0b1321;color:#fff}
       #${rootId} .actions{display:flex;flex-wrap:wrap;gap:8px} #${rootId} button{border:1px solid #50658a;background:#1d2a42;color:#fff;border-radius:9px;padding:9px 12px;font-weight:700;cursor:pointer} #${rootId} button.primary{background:#2d5bd1;border-color:#4c79e4} #${rootId} button.danger{background:#51212a;border-color:#8e4350}
       #${rootId} button:disabled{opacity:.45;cursor:not-allowed} #${rootId} .status{white-space:pre-wrap;border:1px solid #34425b;background:#0c1422;border-radius:10px;padding:11px;min-height:46px;font-size:12px;line-height:1.55}
-      #${rootId} .job{display:none;border:1px solid #365275;background:#101d31;border-radius:12px;padding:12px;gap:9px} #${rootId} .job.show{display:grid}
+      #${rootId} .job{display:none;border:1px solid #365275;background:#101d31;border-radius:12px;padding:12px;gap:9px} #${rootId} .job.show{display:grid} #${rootId} .job.terminal{border-color:#4c668e} #${rootId} .job.failed{border-color:#9b4655;background:#25141d}
       #${rootId} .bar{height:9px;background:#25344d;border-radius:99px;overflow:hidden} #${rootId} .bar>i{display:block;height:100%;background:#5d88ff;width:0%}
-      #${rootId} .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;font-size:12px} @media(max-width:540px){#${rootId} .grid{grid-template-columns:1fr}}
+      #${rootId} .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;font-size:12px} #${rootId} .result{display:none;white-space:pre-wrap;border:1px solid #34425b;background:#0b1423;border-radius:9px;padding:10px;font-size:12px;line-height:1.55} #${rootId} .job.terminal .result{display:block} #${rootId} [hidden]{display:none!important} @media(max-width:540px){#${rootId} .grid{grid-template-columns:1fr}}
     </style>
-      <div class="mscx-card"><div><h3>${esc(panelOptions.title || `${displayName} · 서버 연결`)}</h3><div class="muted">${esc(panelOptions.description || '현재 스코프의 저장 방식만 변경합니다.')}</div></div>
+      <div class="mscx-card"><div><h3>${esc(panelOptions.title || (integratesCompute ? `${displayName} · 저장 및 연산` : `${displayName} · 서버 연결`))}</h3><div class="muted">${esc(panelOptions.description || (integratesCompute ? '현재 스코프의 저장 위치를 선택하면 연산 위치도 함께 결정됩니다.' : '현재 스코프의 저장 방식을 변경합니다.'))}</div></div>
         <div class="scope"><b>현재 스코프</b><span data-scope-label>${esc(initial.scopeLabel || '확인 불가')}</span><div class="muted" data-scope-id>${esc(initial.scopeId || '')}</div></div>
-        <div class="muted"><b>이 설정은 현재 스코프에만 적용됩니다.</b><br>새 스코프의 기본값은 항상 플러그인 단독입니다. 서버 주소만 플러그인 공통 설정입니다.</div>
+        <div class="muted"><b>${integratesCompute ? '이 설정은 현재 스코프의 저장과 연산에 함께 적용됩니다.' : '이 설정은 현재 스코프에만 적용됩니다.'}</b><br>새 스코프의 기본값은 항상 플러그인 단독입니다. 서버 주소만 플러그인 공통 설정입니다.</div>
         <div class="modes">
-          <label class="mode"><input type="radio" name="${rootId}-mode" value="plugin_only"><span><b>플러그인 단독 · 기본</b><br><small>현재 스코프를 RisuAI pluginStorage에만 저장합니다.</small></span></label>
-          <label class="mode"><input type="radio" name="${rootId}-mode" value="mirror"><span><b>플러그인 + 서버 병존</b><br><small>현재 스코프만 양쪽에 실시간 동기화합니다.</small></span></label>
-          <label class="mode"><input type="radio" name="${rootId}-mode" value="server_only"><span><b>서버 단독</b><br><small>현재 스코프의 영구 정본을 Memory Suite DATA에 저장합니다.</small></span></label>
+          <label class="mode"><input type="radio" name="${rootId}-mode" value="plugin_only"><span><b>플러그인 단독 · 기본</b><br><small>${integratesCompute ? 'RisuAI에 저장하고 로컬에서 연산합니다. 서버를 사용하지 않습니다.' : '현재 스코프를 RisuAI pluginStorage에만 저장합니다.'}</small></span></label>
+          <label class="mode"><input type="radio" name="${rootId}-mode" value="mirror"><span><b>미러</b><br><small>${namespace === 'flashback' ? '원문 정본은 서버에 저장하고 로컬 복사본을 유지합니다. 서버 저장 실패는 커밋 성공으로 처리하지 않습니다.' : integratesCompute ? '양쪽에 저장하고 서버에서 우선 연산합니다. 실패하면 로컬로 복귀합니다.' : '현재 스코프만 양쪽에 실시간 동기화합니다.'}</small></span></label>
+          <label class="mode"><input type="radio" name="${rootId}-mode" value="server_only"><span><b>서버 단독</b><br><small>${integratesCompute ? '서버를 영구 정본으로 사용하고 서버에서 우선 연산합니다. 연산 실패는 로컬로 복귀합니다.' : '현재 스코프의 영구 정본을 Librarian System DATA에 저장합니다.'}</small></span></label>
         </div>
-        <label><b>서버 주소</b><input data-url type="text" value="${esc(initial.url)}"></label>
+        <div class="scope" data-mode-summary${integratesCompute ? '' : ' hidden'}></div>
+        <label data-server-fields><b>서버 주소</b><input data-url type="text" value="${esc(initial.url)}"></label>
         <div class="actions"><button data-test>연결 테스트</button><button class="primary" data-apply>설정 적용</button><button data-sync>지금 동기화</button><button data-restore>서버 → pluginStorage 복구</button><button class="danger" data-delete>현재 스코프 pluginStorage 삭제</button></div>
-        <div class="status" data-status>현재 모드: ${esc(initial.modeLabel)}\n서버 상태를 확인할 수 있습니다.</div>
+        <div class="status" data-status>${integratesCompute ? `현재 방식: ${esc(initial.modeLabel)}\n연산: ${initial.executionPolicy?.computeMode === 'prefer_server' ? '서버 우선 · 실패 시 로컬' : '로컬'}` : `현재 모드: ${esc(initial.modeLabel)}\n서버 상태를 확인할 수 있습니다.`}</div>
       </div>
-      <div class="job" data-job><b data-job-title>작업 진행 중</b><div class="bar"><i data-job-bar></i></div><div class="grid"><span data-job-phase></span><span data-job-count></span><span data-job-bytes></span><span data-job-time></span><span data-job-retry></span><span data-job-key></span></div></div>
+      <div class="job" data-job><b data-job-title>작업 진행 중</b><div class="bar"><i data-job-bar></i></div><div class="grid"><span data-job-phase></span><span data-job-count></span><span data-job-bytes></span><span data-job-time></span><span data-job-retry></span><span data-job-key></span></div><div class="result" data-job-result></div><div class="actions" data-job-terminal-actions style="display:none"><button data-job-dismiss type="button">결과 확인 닫기</button></div></div>
     </div>`;
     const root = container.querySelector(`#${rootId}`);
     const q = sel => root.querySelector(sel);
     const setMessage = (message, tone='') => { const box=q('[data-status]'); box.textContent=String(message||''); box.dataset.tone=tone; };
     const radio = root.querySelector(`input[name="${rootId}-mode"][value="${initial.mode}"]`) || root.querySelector(`input[name="${rootId}-mode"][value="plugin_only"]`); if (radio) radio.checked=true;
+    const selectedMode = () => normalizeMode(root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value || MODE_PLUGIN_ONLY);
+    const syncModePresentation = () => {
+      const mode = selectedMode();
+      const local = mode === MODE_PLUGIN_ONLY;
+      const serverFields = q('[data-server-fields]');
+      if (serverFields) serverFields.hidden = integratesCompute && local;
+      const testButton = q('[data-test]');
+      if (testButton) testButton.disabled = integratesCompute && local;
+      const summary = q('[data-mode-summary]');
+      if (summary) summary.hidden = !integratesCompute;
+      if (summary && integratesCompute) summary.innerHTML = local
+        ? '<b>저장: RisuAI pluginStorage</b><br><span class="muted">연산: 로컬 · 자동 서버 요청 0회</span>'
+        : mode === MODE_MIRROR
+          ? '<b>저장: RisuAI + Librarian System</b><br><span class="muted">연산: 서버 우선 · 실패 시 로컬</span>'
+          : '<b>저장: Librarian System 영구 정본</b><br><span class="muted">연산: 서버 우선 · 실패 시 로컬 · 저장 장애는 fail-closed</span>';
+    };
+    const applyRecoveryGuard = lock => {
+      const active=!!lock;
+      for(const input of root.querySelectorAll(`input[name="${rootId}-mode"]`)) input.disabled=active&&input.value!==MODE_SERVER_ONLY;
+      q('[data-sync]').disabled=active; q('[data-delete]').disabled=active;
+      if(active){const serverOnly=root.querySelector(`input[name="${rootId}-mode"][value="server_only"]`);if(serverOnly)serverOnly.checked=true;}
+      syncModePresentation();
+    };
+    applyRecoveryGuard(initial.recoveryRequired);
+    for(const input of root.querySelectorAll(`input[name="${rootId}-mode"]`)) input.addEventListener('change',syncModePresentation);
+    syncModePresentation();
     const formatBytes = bytes => { const n=Math.max(0,Number(bytes||0)); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; if(n<1073741824)return `${(n/1048576).toFixed(1)} MB`; return `${(n/1073741824).toFixed(2)} GB`; };
+    let dismissedJobId='',terminalRefreshId='',computeProbeJobId='';
     const renderJob = job => {
       const card=q('[data-job]');
-      if (!job || job.scopeId !== initial.scopeId || syncJobTerminal(job.status)) { card.classList.remove('show'); return; }
+      if (!job || job.scopeId !== initial.scopeId || job.jobId === dismissedJobId) { card.classList.remove('show','terminal','failed'); return; }
+      const terminal=syncJobTerminal(job.status);
       card.classList.add('show'); const total=Math.max(0,Number(job.totalItems||0)), done=Math.max(0,Number(job.processedItems||0)); const percent=total?Math.min(100,Math.round(done/total*100)):0;
-      q('[data-job-title]').textContent = `${job.message || '작업 진행 중'}${total ? ` · ${percent}%` : ''}`; q('[data-job-bar]').style.width=`${percent}%`;
+      card.classList.toggle('terminal',terminal); card.classList.toggle('failed',job.status==='failed');
+      q('[data-job-title]').textContent = `${job.message || (terminal?'작업 결과':'작업 진행 중')}${total ? ` · ${terminal&&job.status==='completed'?100:percent}%` : ''}`; q('[data-job-bar]').style.width=`${terminal&&job.status==='completed'?100:percent}%`;
       q('[data-job-phase]').textContent=`현재 단계: ${job.phase || '준비'}`; q('[data-job-count]').textContent=`진행: ${done.toLocaleString()} / ${total ? total.toLocaleString() : '조사 중'}`;
       q('[data-job-bytes]').textContent=`처리: ${formatBytes(job.processedBytes)} · 전송: ${formatBytes(job.transferredBytes)}`; q('[data-job-time]').textContent=`경과: ${Math.max(0,Math.floor((Date.now()-Number(job.startedAt||Date.now()))/1000))}초`;
       q('[data-job-retry]').textContent=`재시도 ${Number(job.retryCount||0)} · 실패 ${Number(job.failures||0)}`; q('[data-job-key]').textContent=`현재: ${job.currentKey || job.currentAction || '-'}`;
+      const terminalActions=q('[data-job-terminal-actions]'); terminalActions.style.display=terminal?'flex':'none';
+      const result=job.result&&typeof job.result==='object'?job.result:{};
+      q('[data-job-result]').textContent=terminal
+        ? [job.status==='completed'?'완료 결과':'실패 결과',integratesCompute?`저장 방식 ${modeLabel(job.targetMode || initial.mode)} · 연산 ${normalizeMode(job.targetMode || initial.mode) === MODE_PLUGIN_ONLY ? '로컬' : '서버 우선 · 실패 시 로컬'}`:'',`복원 ${Number(job.restored||result.restored||0)} · 업로드 ${Number(job.uploaded||result.uploaded||0)} · 일치 ${Number(job.matched||result.matched||0)}`,`삭제 표식 ${Number(job.removedByTombstone||result.removed||0)} · 검증 ${Number(result.verified||0)}`,job.recoveryRequired?'복구 필수 잠금: 활성 · 서버 단독 유지':'복구 필수 잠금: 없음',job.error?`오류: ${job.error}`:''].filter(Boolean).join('\n')
+        : '';
+      if(terminal&&job.status==='completed'&&normalizeMode(job.targetMode)!==MODE_PLUGIN_ONLY&&computeProbeJobId!==job.jobId){computeProbeJobId=job.jobId;try{computeBridge?.scheduleProbe?.(0);}catch(_){}}
+      if(terminal&&job.jobId!==terminalRefreshId){terminalRefreshId=job.jobId;scheduleLifecycleTimeout(()=>{void scopedGetConnectionSettings({scope:initial.scope,force:true}).then(settings=>applyRecoveryGuard(settings.recoveryRequired)).catch(()=>{});},0);}
     };
-    q('[data-test]').onclick = async()=>{ setMessage('서버 연결을 확인하고 있습니다…'); const result=await testConnection(q('[data-url]').value); setMessage(result.ok?`연결됨\nMemory Suite ${result.serverVersion}\nProtocol ${result.protocol?.major}.${result.protocol?.minor}\nnamespace ${namespace} · 항목 ${result.liveRecords}`:`연결 실패\n${result.error}`,result.ok?'good':'error'); };
+    q('[data-test]').onclick = async()=>{ setMessage(integratesCompute?'Storage와 Compute 연결을 확인하고 있습니다…':'서버 연결을 확인하고 있습니다…'); const storageResult=await testConnection(q('[data-url]').value); let computeResult=null; if(integratesCompute&&storageResult.ok&&computeBridge?.probe){try{computeResult=await computeBridge.probe({force:true,reason:'integrated_connection_test'});}catch(error){computeResult={ok:false,error:compact(error?.message||error,300)};}} const storageLine=storageResult.ok?`${integratesCompute?'Storage: ':''}연결됨 · Librarian System ${storageResult.serverVersion} · 항목 ${storageResult.liveRecords}`:`${integratesCompute?'Storage: ':''}연결 실패 · ${storageResult.error}`; const computeLine=!integratesCompute?'':!storageResult.ok?'Compute: Storage 연결 실패로 확인하지 않음':computeResult?.ok?`Compute: 연결됨 · ${Number(computeResult.operations?.length||computeResult.operationCount||0)}개 연산`:`Compute: 연결 실패 · 연산 시 로컬 폴백 · ${computeResult?.error||computeResult?.reason||'unavailable'}`; setMessage([storageLine,computeLine].filter(Boolean).join('\n'),storageResult.ok&&(!integratesCompute||computeResult?.ok)?'good':storageResult.ok?'':'error'); };
     q('[data-apply]').onclick = async()=>{ const mode=root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value||MODE_PLUGIN_ONLY; try{const job=await scopedStartConnectionConfigurationJob({mode,url:q('[data-url]').value,scope:initial.scope}); setMessage('설정 적용과 현재 스코프 초기 동기화를 시작했습니다.'); renderJob(job);}catch(error){setMessage(`설정 적용 시작 실패\n${error?.message||error}`,'error');} };
-    q('[data-sync]').onclick = async()=>{ try{const job=await scopedStartSynchronizationJob();setMessage('현재 스코프 동기화를 시작했습니다.');renderJob(job);}catch(error){setMessage(`동기화 시작 실패\n${error?.message||error}`,'error');} };
-    q('[data-restore]').onclick = async()=>{ try{const job=await scopedStartRestoreJob();setMessage('현재 스코프 복구를 시작했습니다.');renderJob(job);}catch(error){setMessage(`복구 시작 실패\n${error?.message||error}`,'error');} };
+    q('[data-sync]').onclick = async()=>{ try{const job=await scopedStartSynchronizationJob({scope:initial.scope});setMessage('현재 스코프 동기화를 시작했습니다.');renderJob(job);}catch(error){setMessage(`동기화 시작 실패\n${error?.userMessage||error?.message||error}`,'error');} };
+    q('[data-restore]').onclick = async()=>{ try{const job=await scopedStartRestoreJob({scope:initial.scope});setMessage('현재 스코프 복구를 시작했습니다.');renderJob(job);}catch(error){setMessage(`복구 시작 실패\n${error?.userMessage||error?.message||error}`,'error');} };
     let armedUntil=0;
-    q('[data-delete]').onclick = async()=>{ const button=q('[data-delete]'); if(Date.now()>armedUntil){button.disabled=true;setMessage('현재 스코프가 서버에 안전하게 보존됐는지 확인하고 있습니다…');try{const checked=await scopedVerifyPreservation(state.legacy.plugin,{scope:initial.scope});armedUntil=Date.now()+30000;button.textContent='검증 완료 · 다시 눌러 삭제';setMessage(`보존 검증 완료 · ${checked.checked}개\n30초 안에 다시 누르면 현재 스코프의 payload만 삭제합니다.`,'good');}catch(error){armedUntil=0;setMessage(`삭제 차단\n${error?.message||error}`,'error');}finally{button.disabled=false;}return;} armedUntil=0;button.disabled=true;try{const result=await scopedDeletePluginStorageAfterVerification();button.textContent='현재 스코프 pluginStorage 삭제';setMessage(`삭제 완료 · ${result.deleted}개\n현재 스코프는 서버 단독입니다.`,'good');}catch(error){setMessage(`삭제 실패\n${error?.message||error}`,'error');}finally{button.disabled=false;} };
+    q('[data-delete]').onclick = async()=>{ const button=q('[data-delete]'); if(Date.now()>armedUntil){button.disabled=true;setMessage('현재 스코프가 서버에 안전하게 보존됐는지 확인하고 있습니다…');try{await assertRecoveryActionAllowed(initial.scope,'delete_pluginstorage');const checked=await scopedVerifyPreservation(state.legacy.plugin,{scope:initial.scope});armedUntil=Date.now()+30000;button.textContent='검증 완료 · 다시 눌러 삭제';setMessage(`보존 검증 완료 · ${checked.checked}개\n30초 안에 다시 누르면 현재 스코프의 payload만 삭제합니다.`,'good');}catch(error){armedUntil=0;setMessage(`삭제 차단\n${error?.userMessage||error?.message||error}`,'error');}finally{button.disabled=false;}return;} armedUntil=0;button.disabled=true;try{const result=await scopedDeletePluginStorageAfterVerification({scope:initial.scope});button.textContent='현재 스코프 pluginStorage 삭제';setMessage(`삭제 완료 · ${result.deleted}개\n현재 스코프는 서버 단독입니다.`,'good');}catch(error){setMessage(`삭제 실패\n${error?.userMessage||error?.message||error}`,'error');}finally{button.disabled=false;} };
+    q('[data-job-dismiss]').onclick=()=>{const job=getSyncJob();if(job&&syncJobTerminal(job.status)){dismissedJobId=job.jobId;renderJob(job);}};
     const unsubscribe=subscribeSyncJob(renderJob); const tick=setInterval(()=>{if(!root.isConnected){clearInterval(tick);unsubscribe();return;}renderJob(getSyncJob());},1000); try{tick?.unref?.();}catch(_){}
     await scopedResumePendingSyncJob().catch(()=>null); renderJob(getSyncJob());
     return true;
@@ -4633,7 +5712,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     try {
       scope = await resolveCurrentScope(false);
       mode = (await readScopeMode(scope, false)).mode;
-    } catch (_) {}
+    } catch (error) { reportStorageFailure('state.snapshot.dispatch', error); }
     return {
       schema: manager ? 'memory-suite.manager-server-diagnostics.v1' : 'memory-suite.plugin-server-diagnostics.v1',
       generatedAt: Date.now(),
@@ -4738,8 +5817,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
   const refreshDiagnostics = async (options = {}) => await getDiagnostics({ ...options, force: true });
   const scheduleDiagnosticsRefresh = (delayMs = 0, options = {}) => {
-    if (state.diagnostics.timer) clearTimeout(state.diagnostics.timer);
-    state.diagnostics.timer = setTimeout(() => {
+    if (state.diagnostics.timer) clearLifecycleTimeout(state.diagnostics.timer);
+    state.diagnostics.timer = scheduleLifecycleTimeout(() => {
       state.diagnostics.timer = null;
       void (async () => {
         const registry = await loadScopeRegistry(false, false);
@@ -4828,14 +5907,52 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const managerServerGetMany = async (targetNamespace, space = 'plugin', keys = []) => {
     const ns = String(targetNamespace || '').trim().toLowerCase();
     const list = Array.isArray(keys) ? keys.map(String).filter(Boolean).slice(0, 512) : [];
-    if (!list.length) return { values: {} };
-    const payload = await managerRequest('POST', '/v1/kv/get-many', { namespace: ns, space: String(space || 'plugin'), keys: list });
-    return payload?.result || { values: {} };
+    if (!list.length) return { values: {}, pages: 0, oversizedKeys: [] };
+    const values = {};
+    const oversizedKeys = new Set();
+    let cursor = 0;
+    let pages = 0;
+    for (;;) {
+      if (pages >= maxStoragePaginationPages) throw new Error('memory_suite_manager_get_many_pagination_limit_exceeded');
+      const payload = await managerRequest('POST', '/v1/kv/get-many', {
+        namespace: ns, space: String(space || 'plugin'), keys: list,
+        paged: true, cursor, maxResponseBytes: getManyResponseBudgetBytes
+      });
+      pages += 1;
+      const result = payload?.result || { values: {} };
+      mergeStorageRecordValues(values, result.values);
+      for (const key of Array.isArray(result.oversizedKeys) ? result.oversizedKeys : []) oversizedKeys.add(String(key));
+      const nextCursor = result?.continuation?.nextCursor;
+      if (nextCursor == null) break;
+      const normalizedNext = Number(nextCursor);
+      if (!Number.isInteger(normalizedNext) || normalizedNext <= cursor || normalizedNext > list.length) throw new Error('memory_suite_manager_get_many_pagination_cursor_invalid');
+      cursor = normalizedNext;
+    }
+    for (const key of oversizedKeys) defineStorageRecordValue(values, key, await managerServerGet(ns, space, key));
+    return { values, pages, oversizedKeys: [...oversizedKeys] };
   };
   const managerServerKeys = async (targetNamespace, space = 'plugin', prefix = '') => {
     const ns = String(targetNamespace || '').trim().toLowerCase();
-    const payload = await managerRequest('GET', `/v1/kv/keys?namespace=${encodeURIComponent(ns)}&space=${encodeURIComponent(String(space || 'plugin'))}&prefix=${encodeURIComponent(String(prefix || ''))}`);
-    return payload?.result || { keys: [], tombstones: [], records: [] };
+    const normalizedSpace = String(space || 'plugin');
+    const normalizedPrefix = String(prefix || '');
+    const keys = [], tombstones = [], records = [];
+    const seenKeys = new Set(), seenTombstones = new Set(), seenRecords = new Set();
+    let cursor = '';
+    let pages = 0;
+    for (;;) {
+      if (pages >= maxStoragePaginationPages) throw new Error('memory_suite_manager_keys_pagination_limit_exceeded');
+      const payload = await managerRequest('GET', `/v1/kv/keys?namespace=${encodeURIComponent(ns)}&space=${encodeURIComponent(normalizedSpace)}&prefix=${encodeURIComponent(normalizedPrefix)}&paged=1&limit=${keyPageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      pages += 1;
+      const result = payload?.result || { keys: [], tombstones: [], records: [] };
+      for (const key of Array.isArray(result.keys) ? result.keys : []) { const value = String(key); if (!seenKeys.has(value)) { seenKeys.add(value); keys.push(value); } }
+      for (const key of Array.isArray(result.tombstones) ? result.tombstones : []) { const value = String(key); if (!seenTombstones.has(value)) { seenTombstones.add(value); tombstones.push(value); } }
+      for (const row of Array.isArray(result.records) ? result.records : []) { const identity = `${String(row?.space || normalizedSpace)}\u0000${String(row?.key || '')}`; if (!seenRecords.has(identity)) { seenRecords.add(identity); records.push(row); } }
+      const nextCursor = String(result.nextCursor || result?.page?.nextCursor || '');
+      if (!nextCursor) break;
+      if (nextCursor === cursor) throw new Error('memory_suite_manager_keys_pagination_cursor_stalled');
+      cursor = nextCursor;
+    }
+    return { keys, tombstones, records, page: { pages, complete: true } };
   };
   const managerServerIntegrity = async targetNamespace => {
     const ns = String(targetNamespace || '').trim().toLowerCase();
@@ -4895,9 +6012,149 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     return response?.result || null;
   };
 
+  const dispose = async () => {
+    if (lifecycle.disposed) return false;
+    lifecycle.disposed = true;
+    for (const timer of [...lifecycle.timers]) clearTimeout(timer);
+    lifecycle.timers.clear();
+    for (const controller of [...lifecycle.abortControllers]) {
+      try { controller.abort(); } catch (_) {}
+    }
+    lifecycle.abortControllers.clear();
+    state.management.timer = null;
+    state.syncJob.retryTimer = null;
+    state.syncJob.persistTimer = null;
+    state.diagnostics.timer = null;
+    state.syncJob.listeners.clear();
+    state.scopeRouting.routeCache.clear();
+    state.scopeRouting.transientModes.clear();
+    state.transientMode = '';
+    mutationTails.clear();
+    resetBootstrapCache();
+    try { state.management.root?.remove?.(); } catch (_) {}
+    state.management.root = null;
+    return true;
+  };
+
+  const flashbackWriterAlias = key => namespace === 'flashback'
+    ? String(key || '').match(/^vector_rag_memory:(?:scope:|local-vector-shard:v1:)([A-Za-z0-9_-]{1,128}):/)?.[1] || '' : '';
+  const flashbackWriters = new Map();
+  const flashbackFenceError = code => Object.assign(new Error(code), { code, storageMutationRejected: true });
+  const flashbackWriterBoundary = async () => {
+    const scope = await resolveCurrentScope(true);
+    return { url: (await readConfig()).url, scopeId: scope?.scopeId || '', mode: (await readScopeMode(scope, true)).mode };
+  };
+  const usableFlashbackFence = async key => {
+    const session = flashbackWriters.get(flashbackWriterAlias(key));
+    if (!session || session.closed) throw flashbackFenceError('FLASHBACK_WRITER_REQUIRED');
+    await session.ready;
+    if (jsonComparable(session.boundary) !== jsonComparable(await flashbackWriterBoundary())) throw flashbackFenceError('FLASHBACK_WRITER_BOUNDARY_CHANGED');
+    if (session.fence.expiresAt - Date.now() < 30000) {
+      const result = await request('POST', '/v1/flashback/writer', { key, action:'renew', ...session.fence }, { allowPluginOnly:true });
+      session.fence = result.result;
+    }
+    return { ...session.fence };
+  };
+  const withFlashbackWriter = async (key, fn, writerOptions = {}) => {
+    const alias = flashbackWriterAlias(key);
+    if (!alias) return await fn();
+    if (!writerOptions.forceServer && (await readScopeMode(await resolveCurrentScope(false), false)).mode === MODE_PLUGIN_ONLY) return await fn();
+    const boundary = await flashbackWriterBoundary();
+    if (!writerOptions.forceServer && boundary.mode === MODE_PLUGIN_ONLY) return await fn();
+    let session = flashbackWriters.get(alias);
+    if (session?.closed) {
+      await session.finished;
+      return await withFlashbackWriter(key, fn, writerOptions);
+    }
+    if (!session) {
+      let finish;
+      session = { boundary, closed:false, users:0, fence:null, finished:new Promise(resolve => { finish = resolve; }), finish:() => finish() };
+      // Publish the pending acquisition before the first await. A second task
+      // in this VM shares it instead of racing its own acquire/release request.
+      flashbackWriters.set(alias, session);
+      session.ready = (async () => {
+        const boot = await bootstrap(false, true);
+        if (boot?.capabilities?.['flashback-writer-fence.v1'] !== true || boot?.capabilities?.['conditional-batch.v1'] !== true) throw flashbackFenceError('FLASHBACK_SERVER_COMMIT_UPGRADE_REQUIRED');
+        const owner = operationId('flashback-writer');
+        const body = { action:'acquire', key, owner };
+        let acquired;
+        try { acquired = await request('POST', '/v1/flashback/writer', body, { allowPluginOnly:true }); }
+        catch (error) {
+          if (error?.status >= 400 && error?.status < 500) throw error;
+          acquired = await request('POST', '/v1/flashback/writer', body, { allowPluginOnly:true, forceBootstrap:true });
+        }
+        const fence = acquired?.result;
+        if (fence?.schema !== 'flashback.writer-fence.v1' || fence.alias !== alias || fence.owner !== owner || !Number.isSafeInteger(fence.epoch)) throw flashbackFenceError('FLASHBACK_WRITER_RECEIPT_INVALID');
+        session.fence = fence;
+      })();
+    }
+    session.users += 1;
+    try {
+      await session.ready;
+      await usableFlashbackFence(key);
+      const result = await fn();
+      try { await usableFlashbackFence(key); }
+      catch (error) { error.storageMutationRejected = false; error.storageMutationIndeterminate = true; throw error; }
+      return result;
+    }
+    finally {
+      session.users -= 1;
+      if (session.users === 0) {
+        session.closed = true;
+        try {
+          if (session.fence && (await readConfig()).url === session.boundary.url) await request('POST', '/v1/flashback/writer', { action:'release', key, ...session.fence }, { allowPluginOnly:true, forceBootstrap:true });
+        } catch (error) { setStatus('writer_release_unconfirmed', error?.message || error); }
+        finally {
+          if (flashbackWriters.get(alias) === session) flashbackWriters.delete(alias);
+          session.finish();
+        }
+      }
+    }
+  };
+  const commitFlashbackManifest = async (key, value, backupValue, expectedValue) => {
+    if ((await readScopeMode(await resolveCurrentScope(false), false)).mode === MODE_PLUGIN_ONLY) return null;
+    return await withFlashbackWriter(key, async () => {
+      const route = await resolveScopedRoute('plugin', key);
+      if (!route.routed || route.mode === MODE_PLUGIN_ONLY) throw flashbackFenceError('FLASHBACK_MANIFEST_ROUTE_UNCONFIRMED');
+      const keys = [route.remoteKey, `${route.remoteKey}:previous:v1`];
+      const values = [value, backupValue];
+      const rows = await Promise.all(keys.map(k => remoteGet('plugin', k, { allowPluginOnly:true })));
+      if (jsonComparable(rows[0].exists ? rows[0].value : null) !== jsonComparable(expectedValue)) throw flashbackFenceError('FLASHBACK_COMMIT_CONFLICT');
+      const mutations = keys.map((k, i) => ({ kind:'set', space:'plugin', key:k, value:values[i],
+        expectedRevision:rows[i].revision || 0, expectedDigest:rows[i].digest || '', expectedExists:rows[i].exists === true, expectedTombstone:rows[i].tombstone === true }));
+      const id = operationId('flashback-manifest');
+      const body = { namespace, operationId:id, mutations, fence:await usableFlashbackFence(key) };
+      let payload;
+      try { payload = await request('POST', '/v1/kv/batch', body, { allowPluginOnly:true }); }
+      catch (error) {
+        if (error?.status >= 400 && error?.status < 500 && error.status !== 408) { error.storageMutationRejected = true; throw error; }
+        try { payload = await statusReadback(id, { allowPluginOnly:true, forceBootstrap:true }); } catch (_) {}
+        if (!payload) { error.storageMutationIndeterminate = true; error.storageOperationId = id; throw error; }
+      }
+      const receipt = payload?.result;
+      if (payload?.ok !== true || receipt?.schema !== 'memory-suite.storage.batch-receipt.v1' || receipt.namespace !== namespace
+        || receipt.operationId !== id || receipt.durable !== true || receipt.verified !== true || receipt.atomicScope !== 'single_namespace_sqlite'
+        || !Array.isArray(receipt.receipts) || receipt.receipts.length !== 2) {
+        throw Object.assign(new Error('FLASHBACK_COMMIT_RECEIPT_INVALID'), { storageMutationIndeterminate:true, storageOperationId:id });
+      }
+      for (let i = 0; i < keys.length; i++) {
+        const row = await remoteGet('plugin', keys[i], { allowPluginOnly:true });
+        const item = receipt.receipts.find(r => r.key === keys[i] && r.space === 'plugin');
+        if (!item || item.kind !== 'set' || item.revision !== mutations[i].expectedRevision + 1 || !/^[a-f0-9]{64}$/.test(item.digest)
+          || !row.exists || row.revision !== item.revision || row.digest !== item.digest || jsonComparable(row.value) !== jsonComparable(values[i])) {
+          throw Object.assign(new Error('FLASHBACK_COMMIT_READBACK_UNCONFIRMED'), { storageMutationCommitted:true, storageOperationId:id });
+        }
+      }
+      await usableFlashbackFence(key);
+      return { ...receipt, endToEndVerified:true, durability:'server_sqlite' };
+    });
+  };
+
   const bridge = Object.freeze({
     namespace,
     pluginId,
+    withFlashbackWriter,
+    commitFlashbackManifest,
     get: scopedGet,
     set: scopedSet,
     remove: scopedRemove,
@@ -4923,11 +6180,17 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     mountConnectionPanel: scopedMountConnectionPanel,
     restoreServerSpaceToLegacy: scopedRestoreSpace,
     prepareServerScopeDeletion: scopedPrepareServerScopeDeletion,
+    ownerLegacyKeys,
+    ownerLegacyRead,
+    ownerLegacyWrite,
+    ownerLegacyRemove,
     deletePluginStorageAfterServerVerification: scopedDeletePluginStorageAfterVerification,
     setMode: scopedSetModeSafely,
     getMode: async () => (await readScopeMode(null, true)).mode,
     getCurrentScope: async () => await resolveCurrentScope(true),
     getScopeMode: async scope => await readScopeMode(scope, true),
+    getScopeExecutionPolicy,
+    getRecoveryState: async scope => await recoveryLockForScope(scope || await resolveCurrentScope(true)),
     setScopeMode: async (scope, mode) => await scopedSetModeSafely(mode, { scope }),
     ensureHandoffReady: scopedEnsureHandoffReady,
     serverGet: scopedServerGet,
@@ -4951,6 +6214,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     managerPlanScopeDeletion,
     managerExecuteScopeDeletion,
     managerSetScopePinned,
+    dispose,
     openManagementDialog,
     registerManagementButton,
     status: () => ({
@@ -4965,10 +6229,1247 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     })
   });
   scheduleManagementRegistration();
-  const startupDiagnosticsDelayMs = Math.max(1200, Math.min(15000, Number(options.startupDiagnosticsDelayMs || (3500 + (namespaceDelaySeed % 7) * 350)) || 3500));
-  scheduleDiagnosticsRefresh(startupDiagnosticsDelayMs, { limit: 250 });
+  if (startupDiagnosticsEnabled) {
+    const startupDiagnosticsDelayMs = Math.max(1200, Math.min(15000, Number(options.startupDiagnosticsDelayMs || (3500 + (namespaceDelaySeed % 7) * 350)) || 3500));
+    scheduleDiagnosticsRefresh(startupDiagnosticsDelayMs, { limit: 250 });
+  }
   return bridge;
 
+};
+
+/* LIBRARIAN SYSTEM COMPUTE SDK v0.3.4
+ * Optional deterministic-compute client shared by Librarian System owner plugins.
+ *
+ * The plugin remains authoritative: local execution is always available, the
+ * server only returns a candidate, and a remote result is adopted only after
+ * exact operation/fingerprint/digest/binding validation.
+ */
+const createMemorySuiteComputeBridge = (rawOptions = {}) => {
+  const options = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+  const namespace = String(options.namespace || '').trim().toLowerCase();
+  const pluginId = String(options.pluginId || namespace || 'plugin').trim();
+  const pluginVersion = String(options.pluginVersion || '').trim();
+  if (!namespace || !/^[a-z0-9._:-]{1,80}$/.test(namespace)) throw new Error('memory_suite_compute_namespace_invalid');
+
+  const MODE_LOCAL = 'local';
+  const MODE_PREFER_SERVER = 'prefer_server';
+  const VALID_MODES = new Set([MODE_LOCAL, MODE_PREFER_SERVER]);
+  const defaultMode = VALID_MODES.has(String(options.defaultMode || '').trim().toLowerCase())
+    ? String(options.defaultMode).trim().toLowerCase()
+    : MODE_LOCAL;
+  const modeArgument = String(options.modeArgument || `memory_suite_${namespace.replace(/[^a-z0-9_]/g, '_')}_compute_mode`).trim();
+  const urlArgument = String(options.urlArgument || 'memory_suite_server_url').trim();
+  const defaultUrl = String(options.defaultUrl || 'http://127.0.0.1:47630').replace(/\/+$/, '');
+  const connectionCacheMs = Math.max(1000, Math.min(5 * 60 * 1000, Number(options.connectionCacheMs || 30000) || 30000));
+  const modeCacheMs = Math.max(0, Math.min(30000, Number(options.modeCacheMs || 1000) || 1000));
+  const defaultDeadlineMs = Math.max(100, Math.min(120000, Number(options.defaultDeadlineMs || 1800) || 1800));
+  const defaultLocalReserveMs = Math.max(0, Math.min(60000, Number(options.localReserveMs || 350) || 350));
+  const probeTimeoutMs = Math.max(250, Math.min(10000, Number(options.probeTimeoutMs || 1800) || 1800));
+  const circuitFailureThreshold = Math.max(1, Math.min(20, Number(options.circuitFailureThreshold || 2) || 2));
+  const circuitBaseCooldownMs = Math.max(250, Math.min(5 * 60 * 1000, Number(options.circuitBaseCooldownMs || 5000) || 5000));
+  const circuitMaxCooldownMs = Math.max(circuitBaseCooldownMs, Math.min(30 * 60 * 1000, Number(options.circuitMaxCooldownMs || 60000) || 60000));
+  const maxInputBytes = Math.max(1024, Math.min(32 * 1024 * 1024, Number(options.maxInputBytes || 8 * 1024 * 1024) || 8 * 1024 * 1024));
+  const maxResultBytes = Math.max(1024, Math.min(32 * 1024 * 1024, Number(options.maxResultBytes || 8 * 1024 * 1024) || 8 * 1024 * 1024));
+  const maxBindingBytes = Math.max(256, Math.min(256 * 1024, Number(options.maxBindingBytes || 64 * 1024) || 64 * 1024));
+  const maxJsonDepth = Math.max(4, Math.min(128, Number(options.maxJsonDepth || 64) || 64));
+  const maxJsonNodes = Math.max(100, Math.min(1000000, Number(options.maxJsonNodes || 1000000) || 1000000));
+  const derivedCacheTtlMs = Math.max(1000, Math.min(24 * 60 * 60 * 1000, Number(options.derivedCacheTtlMs || 5 * 60 * 1000) || 5 * 60 * 1000));
+  const maxDerivedCacheEntries = Math.max(1, Math.min(1000, Number(options.maxDerivedCacheEntries || 64) || 64));
+  const jobPollIntervalMs = Math.max(25, Math.min(2000, Number(options.jobPollIntervalMs || 100) || 100));
+  const disposeCancelGraceMs = Math.max(0, Math.min(2000, Number(options.disposeCancelGraceMs ?? 250) || 0));
+  const now = typeof options.now === 'function' ? options.now : () => Date.now();
+
+  const codedError = (message, code, extra = null) => {
+    const error = new Error(String(message || code || 'memory_suite_compute_error'));
+    if (code) error.code = String(code);
+    if (extra && typeof extra === 'object') Object.assign(error, extra);
+    return error;
+  };
+  const compact = (value, limit = 400) => String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  const normalizeMode = raw => {
+    const value = String(raw || '').trim().toLowerCase().replace(/[ -]+/g, '_');
+    if (['prefer_server', 'server_preferred', 'prefer_backend', 'backend_preferred', 'auto'].includes(value)) return MODE_PREFER_SERVER;
+    // Legacy shadow/compare values adopted the local result. Preserve that
+    // outcome while retiring shadow as a configurable execution mode.
+    return MODE_LOCAL;
+  };
+  const normalizeServerUrl = rawValue => {
+    const raw = String(rawValue || defaultUrl).trim().replace(/\/+$/, '') || defaultUrl;
+    try {
+      const parsed = new URL(raw);
+      const host = String(parsed.hostname || '').toLowerCase();
+      if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(host)) {
+        throw new Error('server_url_must_be_loopback_http');
+      }
+      return parsed.origin;
+    } catch (error) {
+      throw codedError(`invalid_memory_suite_compute_server_url:${compact(error?.message || error, 180)}`, 'MEMORY_SUITE_COMPUTE_INVALID_SERVER_URL');
+    }
+  };
+
+  const lifecycle = {
+    disposed: false,
+    epoch: 1,
+    timers: new Set(),
+    abortControllers: new Set(),
+    background: new Set()
+  };
+  const state = {
+    mode: { value: defaultMode, at: 0, transient: '' },
+    connection: { value: null, at: 0, pending: null },
+    unsupported: false,
+    status: { state: 'idle', reason: '', at: now() },
+    circuit: { state: 'closed', failures: 0, trips: 0, openUntil: 0, halfOpenInFlight: false },
+    counters: {
+      local: 0, server: 0, fallbacks: 0, remoteFailures: 0,
+      jobsSubmitted: 0, jobsSucceeded: 0, jobsFailed: 0, cacheHits: 0, cacheMisses: 0, cacheStale: 0
+    },
+    inFlight: 0,
+    listeners: new Set(),
+    jobContexts: new Map(),
+    jobRuns: new Map(),
+    derivedCache: new Map()
+  };
+
+  const assertActive = expectedEpoch => {
+    if (lifecycle.disposed || (expectedEpoch != null && expectedEpoch !== lifecycle.epoch)) {
+      throw codedError('memory_suite_compute_bridge_disposed', 'MEMORY_SUITE_COMPUTE_BRIDGE_DISPOSED');
+    }
+  };
+  const scheduleLifecycleTimeout = (callback, delayMs) => {
+    if (lifecycle.disposed) return null;
+    let timer = null;
+    timer = setTimeout(() => {
+      lifecycle.timers.delete(timer);
+      if (lifecycle.disposed) return;
+      try { callback(); } catch (_) {}
+    }, Math.max(0, Number(delayMs || 0) || 0));
+    lifecycle.timers.add(timer);
+    try { timer?.unref?.(); } catch (_) {}
+    return timer;
+  };
+  const trackBackground = promise => {
+    if (lifecycle.disposed) return Promise.resolve(null);
+    let tracked = null;
+    tracked = Promise.resolve(promise)
+      .catch(() => null)
+      .finally(() => lifecycle.background.delete(tracked));
+    lifecycle.background.add(tracked);
+    return tracked;
+  };
+  const trackBackgroundTask = promise => {
+    if (lifecycle.disposed) return Promise.reject(codedError('memory_suite_compute_bridge_disposed', 'MEMORY_SUITE_COMPUTE_BRIDGE_DISPOSED'));
+    let tracked = null;
+    tracked = Promise.resolve(promise).finally(() => lifecycle.background.delete(tracked));
+    lifecycle.background.add(tracked);
+    tracked.catch(() => null);
+    return tracked;
+  };
+  const backgroundDelay = async (delayMs, expectedEpoch) => {
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, Number(delayMs || 0) || 0)));
+    assertActive(expectedEpoch);
+  };
+
+  const status = () => ({
+    namespace,
+    pluginId,
+    mode: state.mode.transient || state.mode.value || defaultMode,
+    state: state.status.state,
+    reason: state.status.reason,
+    at: state.status.at,
+    serverVersion: String(state.connection.value?.version || ''),
+    capabilities: state.connection.value ? { ...state.connection.value.capabilities } : {},
+    operationCount: state.connection.value?.operations instanceof Map ? state.connection.value.operations.size : 0,
+    circuit: { ...state.circuit },
+    inFlight: state.inFlight,
+    counters: { ...state.counters },
+    backgroundJobs: state.jobRuns.size,
+    derivedCacheEntries: state.derivedCache.size,
+    disposed: lifecycle.disposed
+  });
+  const emitStatus = (nextState, reason = '', extra = null) => {
+    state.status = { state: String(nextState || 'idle'), reason: compact(reason, 500), at: now(), ...(extra && typeof extra === 'object' ? extra : {}) };
+    const snapshot = status();
+    for (const listener of [...state.listeners]) {
+      try { listener(snapshot); } catch (_) {}
+    }
+    return snapshot;
+  };
+  const subscribe = listener => {
+    assertActive();
+    if (typeof listener !== 'function') throw codedError('memory_suite_compute_listener_invalid', 'MEMORY_SUITE_COMPUTE_LISTENER_INVALID');
+    state.listeners.add(listener);
+    try { listener(status()); } catch (_) {}
+    return () => state.listeners.delete(listener);
+  };
+
+  const capturedApis = [];
+  const captureApi = value => {
+    if (value && (typeof value === 'object' || typeof value === 'function') && !capturedApis.includes(value)) capturedApis.push(value);
+  };
+  captureApi(options.api);
+  try { if (typeof risuai !== 'undefined') captureApi(risuai); } catch (_) {}
+  try { if (typeof risuApi !== 'undefined') captureApi(risuApi); } catch (_) {}
+  try { if (typeof risuAPI !== 'undefined') captureApi(risuAPI); } catch (_) {}
+  try { if (typeof Risuai !== 'undefined') captureApi(Risuai); } catch (_) {}
+  try { if (typeof RisuAI !== 'undefined') captureApi(RisuAI); } catch (_) {}
+  try {
+    if (typeof globalThis !== 'undefined') {
+      captureApi(globalThis.risuai);
+      captureApi(globalThis.risuApi);
+      captureApi(globalThis.risuAPI);
+      captureApi(globalThis.Risuai);
+      captureApi(globalThis.RisuAI);
+      captureApi(globalThis.__pluginApis__);
+    }
+  } catch (_) {}
+  const capturedFetch = (() => {
+    if (typeof options.fetch === 'function') return options.fetch;
+    for (const api of capturedApis) {
+      if (typeof api?.nativeFetch === 'function') return api.nativeFetch.bind(api);
+      if (typeof api?.risuFetch === 'function') return api.risuFetch.bind(api);
+    }
+    try { if (typeof fetch === 'function') return fetch.bind(globalThis); } catch (_) {}
+    return null;
+  })();
+  const capturedGetArgument = (() => {
+    if (typeof options.getArgument === 'function') return options.getArgument;
+    for (const api of capturedApis) {
+      if (typeof api?.getArgument === 'function') return api.getArgument.bind(api);
+      if (typeof api?.getArg === 'function') return api.getArg.bind(api);
+    }
+    return null;
+  })();
+  const capturedSetArgument = (() => {
+    if (typeof options.setArgument === 'function') return options.setArgument;
+    for (const api of capturedApis) {
+      if (typeof api?.setArgument === 'function') return api.setArgument.bind(api);
+      if (typeof api?.setArg === 'function') return api.setArg.bind(api);
+    }
+    return null;
+  })();
+
+  const readMode = async (force = false) => {
+    assertActive();
+    if (!force && state.mode.transient) return state.mode.transient;
+    if (!force && state.mode.at && now() - state.mode.at < modeCacheMs) return state.mode.value;
+    let raw = defaultMode;
+    try {
+      if (typeof options.modeProvider === 'function') raw = await options.modeProvider({ namespace, pluginId });
+      else if (capturedGetArgument) raw = await capturedGetArgument(modeArgument);
+    } catch (_) { raw = state.mode.value || defaultMode; }
+    const value = normalizeMode(raw || defaultMode);
+    state.mode = { value, at: now(), transient: state.mode.transient };
+    return value;
+  };
+  const setMode = async rawMode => {
+    assertActive();
+    const value = normalizeMode(rawMode);
+    state.mode.transient = value;
+    try {
+      if (typeof options.modeSetter === 'function') {
+        const accepted = await options.modeSetter(value, { namespace, pluginId });
+        if (accepted === false) throw new Error('compute_mode_write_rejected');
+      } else if (capturedSetArgument) {
+        const accepted = await capturedSetArgument(modeArgument, value);
+        if (accepted === false) throw new Error('compute_mode_write_rejected');
+      } else {
+        throw codedError('memory_suite_compute_mode_persistence_unavailable', 'MEMORY_SUITE_COMPUTE_MODE_PERSISTENCE_UNAVAILABLE');
+      }
+      state.mode.at = 0;
+      state.mode.transient = '';
+      const verified = await readMode(true);
+      if (verified !== value) throw codedError(`memory_suite_compute_mode_readback_mismatch:${verified}->${value}`, 'MEMORY_SUITE_COMPUTE_MODE_READBACK_MISMATCH');
+      if (value === MODE_LOCAL) state.connection = { value: null, at: 0, pending: null };
+      emitStatus('mode_changed', '', { mode: value });
+      if (value !== MODE_LOCAL) scheduleProbe(0);
+      return value;
+    } catch (error) {
+      state.mode.transient = '';
+      state.mode.at = 0;
+      throw error;
+    }
+  };
+
+  const utf8Bytes = value => {
+    const text = String(value || '');
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(text);
+    const bytes = [];
+    for (let i = 0; i < text.length; i += 1) {
+      let code = text.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length) {
+        const next = text.charCodeAt(i + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+          i += 1;
+        }
+      }
+      if (code <= 0x7f) bytes.push(code);
+      else if (code <= 0x7ff) bytes.push(0xc0 | (code >>> 6), 0x80 | (code & 0x3f));
+      else if (code <= 0xffff) bytes.push(0xe0 | (code >>> 12), 0x80 | ((code >>> 6) & 0x3f), 0x80 | (code & 0x3f));
+      else bytes.push(0xf0 | (code >>> 18), 0x80 | ((code >>> 12) & 0x3f), 0x80 | ((code >>> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+    return new Uint8Array(bytes);
+  };
+  const canonicalJson = value => {
+    const seen = new Set();
+    let nodes = 0;
+    const visit = (current, depth) => {
+      nodes += 1;
+      if (nodes > maxJsonNodes) throw codedError('memory_suite_compute_json_node_limit', 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+      if (depth > maxJsonDepth) throw codedError('memory_suite_compute_json_depth_limit', 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+      if (current === null) return 'null';
+      const type = typeof current;
+      if (type === 'string' || type === 'boolean') return JSON.stringify(current);
+      if (type === 'number') {
+        if (!Number.isFinite(current)) throw codedError('memory_suite_compute_json_non_finite_number', 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+        return JSON.stringify(Object.is(current, -0) ? 0 : current);
+      }
+      if (type !== 'object') throw codedError(`memory_suite_compute_json_type_unsupported:${type}`, 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+      if (seen.has(current)) throw codedError('memory_suite_compute_json_cycle', 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+      const tag = Object.prototype.toString.call(current);
+      if (tag !== '[object Object]' && tag !== '[object Array]') {
+        throw codedError(`memory_suite_compute_json_object_unsupported:${tag}`, 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+      }
+      if (!Array.isArray(current)) {
+        const prototype = Object.getPrototypeOf(current);
+        if (prototype !== null && String(prototype?.constructor?.name || '') !== 'Object') {
+          throw codedError('memory_suite_compute_json_non_plain_object', 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+        }
+      }
+      seen.add(current);
+      let encoded;
+      if (Array.isArray(current)) {
+        const items = [];
+        for (let index = 0; index < current.length; index += 1) {
+          if (!Object.prototype.hasOwnProperty.call(current, index)) {
+            throw codedError('memory_suite_compute_json_sparse_array', 'MEMORY_SUITE_COMPUTE_INPUT_INVALID');
+          }
+          items.push(visit(current[index], depth + 1));
+        }
+        encoded = `[${items.join(',')}]`;
+      } else {
+        const keys = Object.keys(current).sort();
+        encoded = `{${keys.map(key => `${JSON.stringify(key)}:${visit(current[key], depth + 1)}`).join(',')}}`;
+      }
+      seen.delete(current);
+      return encoded;
+    };
+    return visit(value, 0);
+  };
+  const sha256Hex = value => {
+    const bytes = utf8Bytes(value);
+    const bitLength = bytes.length * 8;
+    const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
+    const data = new Uint8Array(paddedLength);
+    data.set(bytes);
+    data[bytes.length] = 0x80;
+    const high = Math.floor(bitLength / 0x100000000);
+    const low = bitLength >>> 0;
+    data[paddedLength - 8] = (high >>> 24) & 0xff;
+    data[paddedLength - 7] = (high >>> 16) & 0xff;
+    data[paddedLength - 6] = (high >>> 8) & 0xff;
+    data[paddedLength - 5] = high & 0xff;
+    data[paddedLength - 4] = (low >>> 24) & 0xff;
+    data[paddedLength - 3] = (low >>> 16) & 0xff;
+    data[paddedLength - 2] = (low >>> 8) & 0xff;
+    data[paddedLength - 1] = low & 0xff;
+    const constants = [
+      0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+      0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+      0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+      0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+      0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+      0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+      0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+      0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+    ];
+    const rotate = (word, bits) => (word >>> bits) | (word << (32 - bits));
+    let h0=0x6a09e667, h1=0xbb67ae85, h2=0x3c6ef372, h3=0xa54ff53a;
+    let h4=0x510e527f, h5=0x9b05688c, h6=0x1f83d9ab, h7=0x5be0cd19;
+    const words = new Uint32Array(64);
+    for (let offset = 0; offset < data.length; offset += 64) {
+      for (let i = 0; i < 16; i += 1) {
+        const at = offset + i * 4;
+        words[i] = ((data[at] << 24) | (data[at + 1] << 16) | (data[at + 2] << 8) | data[at + 3]) >>> 0;
+      }
+      for (let i = 16; i < 64; i += 1) {
+        const s0 = rotate(words[i - 15], 7) ^ rotate(words[i - 15], 18) ^ (words[i - 15] >>> 3);
+        const s1 = rotate(words[i - 2], 17) ^ rotate(words[i - 2], 19) ^ (words[i - 2] >>> 10);
+        words[i] = (words[i - 16] + s0 + words[i - 7] + s1) >>> 0;
+      }
+      let a=h0, b=h1, c=h2, d=h3, e=h4, f=h5, g=h6, h=h7;
+      for (let i = 0; i < 64; i += 1) {
+        const s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
+        const choice = (e & f) ^ (~e & g);
+        const temp1 = (h + s1 + choice + constants[i] + words[i]) >>> 0;
+        const s0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
+        const majority = (a & b) ^ (a & c) ^ (b & c);
+        const temp2 = (s0 + majority) >>> 0;
+        h=g; g=f; f=e; e=(d + temp1) >>> 0; d=c; c=b; b=a; a=(temp1 + temp2) >>> 0;
+      }
+      h0=(h0+a)>>>0; h1=(h1+b)>>>0; h2=(h2+c)>>>0; h3=(h3+d)>>>0;
+      h4=(h4+e)>>>0; h5=(h5+f)>>>0; h6=(h6+g)>>>0; h7=(h7+h)>>>0;
+    }
+    return [h0,h1,h2,h3,h4,h5,h6,h7].map(word => word.toString(16).padStart(8, '0')).join('');
+  };
+  const freezeDeep = value => {
+    if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+    for (const key of Object.keys(value)) freezeDeep(value[key]);
+    return Object.freeze(value);
+  };
+  const makeSnapshot = (value, label, byteLimit) => {
+    let canonical;
+    try { canonical = canonicalJson(value); }
+    catch (error) {
+      if (!error.code) error.code = 'MEMORY_SUITE_COMPUTE_INPUT_INVALID';
+      error.field = label;
+      throw error;
+    }
+    const bytes = utf8Bytes(canonical).length;
+    if (bytes > byteLimit) throw codedError(`memory_suite_compute_${label}_too_large:${bytes}`, 'MEMORY_SUITE_COMPUTE_PAYLOAD_TOO_LARGE', { field: label, bytes, limit: byteLimit });
+    return { value: freezeDeep(JSON.parse(canonical)), canonical, digest: sha256Hex(canonical), bytes };
+  };
+
+  const operationRegistry = new Map();
+  const registerDescriptor = (operationValue, rawDescriptor) => {
+    const operation = String(operationValue || rawDescriptor?.operation || '').trim();
+    if (!/^[A-Za-z0-9._:-]{1,160}$/.test(operation)) throw codedError(`memory_suite_compute_operation_invalid:${operation}`, 'MEMORY_SUITE_COMPUTE_OPERATION_INVALID');
+    const descriptor = rawDescriptor && typeof rawDescriptor === 'object' ? rawDescriptor : {};
+    const algorithmFingerprint = String(descriptor.algorithmFingerprint || '').trim();
+    if (!algorithmFingerprint || algorithmFingerprint.length > 256) {
+      throw codedError(`memory_suite_compute_algorithm_fingerprint_invalid:${operation}`, 'MEMORY_SUITE_COMPUTE_FINGERPRINT_INVALID');
+    }
+    if (typeof descriptor.local !== 'function' && typeof descriptor.executeLocal !== 'function') {
+      throw codedError(`memory_suite_compute_local_executor_missing:${operation}`, 'MEMORY_SUITE_COMPUTE_LOCAL_EXECUTOR_MISSING');
+    }
+    operationRegistry.set(operation, Object.freeze({
+      operation,
+      algorithmFingerprint,
+      local: typeof descriptor.local === 'function' ? descriptor.local : descriptor.executeLocal,
+      validateResult: typeof descriptor.validateResult === 'function' ? descriptor.validateResult : null
+    }));
+  };
+  if (Array.isArray(options.operations)) {
+    for (const descriptor of options.operations) registerDescriptor(descriptor?.operation, descriptor);
+  } else if (options.operations && typeof options.operations === 'object') {
+    for (const [operation, descriptor] of Object.entries(options.operations)) registerDescriptor(operation, descriptor);
+  }
+
+  const operationId = operation => {
+    let unique = '';
+    try { unique = globalThis?.crypto?.randomUUID?.() || ''; } catch (_) {}
+    if (!unique) unique = `${now().toString(36)}_${Math.random().toString(36).slice(2)}_${Math.random().toString(36).slice(2)}`;
+    const prefix = `${namespace}_${operation}_${pluginId}`.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 100);
+    return `${prefix}_${unique.replace(/[^A-Za-z0-9._:-]/g, '')}`.slice(0, 240);
+  };
+
+  const withTimeout = async (promise, timeoutMs, label, abort = null) => {
+    const effective = Math.max(25, Number(timeoutMs || 0) || 25);
+    let timer = null;
+    try {
+      return await Promise.race([
+        Promise.resolve(promise),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            try { abort?.(); } catch (_) {}
+            reject(codedError(`${label || 'Librarian System compute request'} timed out after ${effective}ms`, 'MEMORY_SUITE_COMPUTE_TIMEOUT', { retryable: true }));
+          }, effective);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  const responseText = async response => {
+    if (typeof response?.text === 'function') return await response.text();
+    if (typeof response?.json === 'function') return JSON.stringify(await response.json());
+    if (typeof response === 'string') return response;
+    if (response && typeof response === 'object' && Object.prototype.hasOwnProperty.call(response, 'data')) {
+      return typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+    }
+    return JSON.stringify(response || {});
+  };
+  const fetchJson = async (url, init, label, timeoutMs, expectedEpoch) => {
+    assertActive(expectedEpoch);
+    if (!capturedFetch) throw codedError('memory_suite_compute_fetch_unavailable', 'MEMORY_SUITE_COMPUTE_FETCH_UNAVAILABLE');
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    if (controller) lifecycle.abortControllers.add(controller);
+    const abort = () => { try { controller?.abort?.(); } catch (_) {} };
+    const requestDeadlineAt = now() + Math.max(25, Number(timeoutMs || probeTimeoutMs) || probeTimeoutMs);
+    const remaining = () => Math.max(25, requestDeadlineAt - now());
+    try {
+      const requestInit = {
+        ...(init || {}),
+        ...(controller ? { signal: controller.signal } : {}),
+        networkRoute: 'local_network',
+        requestTimeoutMs: Math.max(25, Number(timeoutMs || probeTimeoutMs) || probeTimeoutMs),
+        logFetch: false
+      };
+      const response = await withTimeout(capturedFetch(url, requestInit), remaining(), label, abort);
+      const raw = await withTimeout(responseText(response), remaining(), `${label} response`, abort);
+      let payload;
+      try { payload = raw ? JSON.parse(raw) : {}; }
+      catch (parseError) {
+        throw codedError('memory_suite_compute_server_invalid_json', 'MEMORY_SUITE_COMPUTE_SERVER_INVALID_JSON', { status: Number(response?.status || 0), cause: parseError });
+      }
+      const statusCode = Number(response?.status || payload?.status || 0);
+      const responseOk = typeof response?.ok === 'boolean' ? response.ok : (statusCode ? statusCode >= 200 && statusCode < 300 : payload?.ok === true);
+      if (!responseOk || payload?.ok !== true) {
+        throw codedError(payload?.error || `memory_suite_compute_http_${statusCode || 'unknown'}`, payload?.code || 'MEMORY_SUITE_COMPUTE_HTTP_ERROR', { status: statusCode, payload });
+      }
+      assertActive(expectedEpoch);
+      return payload;
+    } catch (error) {
+      if (error?.name === 'AbortError' && error?.code !== 'MEMORY_SUITE_COMPUTE_BRIDGE_DISPOSED') {
+        throw codedError('memory_suite_compute_request_aborted', 'MEMORY_SUITE_COMPUTE_ABORTED', { retryable: true });
+      }
+      throw error;
+    } finally {
+      if (controller) lifecycle.abortControllers.delete(controller);
+    }
+  };
+
+  const resolveServerUrl = async () => {
+    let value = defaultUrl;
+    if (typeof options.urlProvider === 'function') value = await options.urlProvider({ namespace, pluginId });
+    else if (capturedGetArgument && urlArgument) value = await capturedGetArgument(urlArgument);
+    return normalizeServerUrl(value || defaultUrl);
+  };
+  const validateComputeBootstrap = (payload, requestedUrl) => {
+    if (payload?.schema !== 'memory-suite.compute.bootstrap.v1' || !payload?.token || !payload?.url) {
+      throw codedError('memory_suite_compute_bootstrap_contract_mismatch', 'MEMORY_SUITE_COMPUTE_BOOTSTRAP_INVALID');
+    }
+    const authorization = payload.authorization || {};
+    if (String(authorization.pluginId || '') !== pluginId
+      || String(authorization.namespace || '') !== namespace
+      || !Array.isArray(authorization.roles)
+      || !authorization.roles.includes('compute')) {
+      throw codedError('memory_suite_compute_authorization_mismatch', 'MEMORY_SUITE_COMPUTE_AUTHORIZATION_INVALID');
+    }
+    if (payload.capabilities?.['compute.v1'] !== true) {
+      throw codedError('memory_suite_compute_capability_missing', 'MEMORY_SUITE_COMPUTE_UNSUPPORTED');
+    }
+    const operations = new Map();
+    for (const item of Array.isArray(payload.operations) ? payload.operations : []) {
+      const name = String(item?.operation || '').trim();
+      const fingerprint = String(item?.algorithmFingerprint || '').trim();
+      if (!/^[A-Za-z0-9._:-]{1,160}$/.test(name) || !fingerprint) continue;
+      operations.set(name, { operation: name, algorithmFingerprint: fingerprint, maxDeadlineMs: Math.max(0, Number(item?.maxDeadlineMs || 0) || 0) });
+    }
+    return {
+      requestedUrl: normalizeServerUrl(requestedUrl),
+      url: normalizeServerUrl(payload.url),
+      token: String(payload.token),
+      version: String(payload.version || ''),
+      capabilities: { ...(payload.capabilities || {}) },
+      limits: payload.limits && typeof payload.limits === 'object' ? { ...payload.limits } : {},
+      operations
+    };
+  };
+  const resetConnection = () => { state.connection = { value: null, at: 0, pending: null }; };
+  const ensureComputeConnectionRaw = async (force, timeoutMs, expectedEpoch) => {
+    assertActive(expectedEpoch);
+    if (force === true) {
+      state.unsupported = false;
+      resetConnection();
+    }
+    if (state.unsupported && force !== true) throw codedError('memory_suite_compute_unsupported', 'MEMORY_SUITE_COMPUTE_UNSUPPORTED');
+    if (state.connection.value && now() - state.connection.at < connectionCacheMs) return state.connection.value;
+    if (state.connection.pending) return await withTimeout(state.connection.pending, timeoutMs, 'Librarian System compute bootstrap');
+    const pending = (async () => {
+      const baseUrl = await resolveServerUrl();
+      const payload = await fetchJson(`${baseUrl}/v1/compute/bootstrap`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Memory-Suite-Plugin': pluginId,
+          'X-Memory-Suite-Plugin-Version': pluginVersion
+        },
+        body: JSON.stringify({ namespace })
+      }, 'Librarian System compute bootstrap', timeoutMs, expectedEpoch);
+      return validateComputeBootstrap(payload, baseUrl);
+    })();
+    state.connection = { value: null, at: 0, pending };
+    try {
+      const value = await withTimeout(pending, timeoutMs, 'Librarian System compute bootstrap');
+      assertActive(expectedEpoch);
+      state.connection = { value, at: now(), pending: null };
+      return value;
+    } catch (error) {
+      if (!lifecycle.disposed) state.connection = { value: null, at: 0, pending: null };
+      throw error;
+    }
+  };
+
+  const acquireCircuit = (force = false) => {
+    const current = now();
+    if (state.circuit.state === 'open') {
+      if (current < state.circuit.openUntil && force !== true) return null;
+      if (state.circuit.halfOpenInFlight) return null;
+      state.circuit.state = 'half_open';
+      state.circuit.halfOpenInFlight = true;
+      emitStatus('circuit_half_open');
+      return { halfOpen: true };
+    }
+    if (state.circuit.state === 'half_open') {
+      if (state.circuit.halfOpenInFlight) return null;
+      state.circuit.halfOpenInFlight = true;
+      return { halfOpen: true };
+    }
+    return { halfOpen: false };
+  };
+  const circuitRelevant = error => ![
+    'MEMORY_SUITE_COMPUTE_UNSUPPORTED',
+    'MEMORY_SUITE_COMPUTE_OPERATION_UNAVAILABLE',
+    'MEMORY_SUITE_COMPUTE_DEADLINE_RESERVED',
+    'MEMORY_SUITE_COMPUTE_BINDING_STALE',
+    'MEMORY_SUITE_COMPUTE_BRIDGE_DISPOSED'
+  ].includes(String(error?.code || ''));
+  const circuitSuccess = ticket => {
+    if (ticket?.halfOpen) state.circuit.halfOpenInFlight = false;
+    state.circuit.state = 'closed';
+    state.circuit.failures = 0;
+    state.circuit.openUntil = 0;
+  };
+  const circuitFailure = (ticket, error) => {
+    if (ticket?.halfOpen) state.circuit.halfOpenInFlight = false;
+    if (!circuitRelevant(error)) {
+      if (state.circuit.state === 'half_open') state.circuit.state = 'closed';
+      return;
+    }
+    state.circuit.failures += 1;
+    state.counters.remoteFailures += 1;
+    if (ticket?.halfOpen || state.circuit.failures >= circuitFailureThreshold) {
+      state.circuit.trips += 1;
+      const cooldown = Math.min(circuitMaxCooldownMs, circuitBaseCooldownMs * (2 ** Math.max(0, state.circuit.trips - 1)));
+      state.circuit.state = 'open';
+      state.circuit.openUntil = now() + cooldown;
+      emitStatus('circuit_open', error?.code || error?.message || error, { openUntil: state.circuit.openUntil });
+    }
+  };
+
+  const probe = async (probeOptions = {}) => {
+    const epoch = lifecycle.epoch;
+    assertActive(epoch);
+    const force = probeOptions.force === true;
+    const mode = await readMode(false);
+    if (mode === MODE_LOCAL && !force) return { ok: false, skipped: true, reason: 'local_mode', mode };
+    const ticket = acquireCircuit(force);
+    if (!ticket) return { ok: false, skipped: true, reason: 'circuit_open', mode, retryAt: state.circuit.openUntil };
+    emitStatus('probing', String(probeOptions.reason || ''));
+    try {
+      const connection = await ensureComputeConnectionRaw(force, Math.max(250, Number(probeOptions.timeoutMs || probeTimeoutMs) || probeTimeoutMs), epoch);
+      circuitSuccess(ticket);
+      emitStatus('ready');
+      return {
+        ok: true,
+        mode,
+        url: connection.url,
+        version: connection.version,
+        capabilities: { ...connection.capabilities },
+        operations: [...connection.operations.values()].map(item => ({ ...item }))
+      };
+    } catch (error) {
+      circuitFailure(ticket, error);
+      if (error?.code === 'MEMORY_SUITE_COMPUTE_UNSUPPORTED') emitStatus('unsupported', error.code);
+      else emitStatus('unavailable', error?.code || error?.message || error);
+      return { ok: false, mode, error: compact(error?.message || error, 500), code: String(error?.code || ''), retryAt: state.circuit.openUntil || 0 };
+    }
+  };
+  function scheduleProbe(delayMs = null) {
+    if (lifecycle.disposed || options.backgroundProbe === false) return null;
+    const seed = Array.from(namespace).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+    const delay = delayMs == null
+      ? Math.max(0, Number(options.backgroundProbeDelayMs ?? (1200 + (seed % 7) * 180)) || 0)
+      : Math.max(0, Number(delayMs || 0) || 0);
+    return scheduleLifecycleTimeout(() => {
+      trackBackground((async () => {
+        const mode = await readMode(false);
+        if (mode === MODE_LOCAL) return null;
+        return await probe({ reason: 'background' });
+      })());
+    }, delay);
+  }
+
+  const prepareCall = async rawRequest => {
+    const request = rawRequest && typeof rawRequest === 'object' ? rawRequest : {};
+    const operation = String(request.operation || '').trim();
+    const descriptor = operationRegistry.get(operation);
+    if (!descriptor) throw codedError(`memory_suite_compute_operation_not_registered:${operation}`, 'MEMORY_SUITE_COMPUTE_OPERATION_NOT_REGISTERED');
+    if (request.algorithmFingerprint && String(request.algorithmFingerprint) !== descriptor.algorithmFingerprint) {
+      throw codedError('memory_suite_compute_algorithm_fingerprint_mismatch', 'MEMORY_SUITE_COMPUTE_FINGERPRINT_MISMATCH');
+    }
+    const input = makeSnapshot(request.input, 'input', maxInputBytes);
+    let bindingValue = request.binding;
+    if (bindingValue === undefined && typeof options.bindingProvider === 'function') {
+      bindingValue = await options.bindingProvider({ operation, input: input.value, inputDigest: input.digest });
+    }
+    if (bindingValue === undefined) bindingValue = {};
+    const binding = makeSnapshot(bindingValue, 'binding', maxBindingBytes);
+    const deadlineMs = Math.max(50, Math.min(120000, Number(request.deadlineMs || defaultDeadlineMs) || defaultDeadlineMs));
+    const localReserveMs = Math.max(0, Math.min(deadlineMs - 1, Number(request.localReserveMs ?? defaultLocalReserveMs) || 0));
+    const lane = ['interactive', 'background', 'maintenance'].includes(String(request.lane || 'interactive')) ? String(request.lane || 'interactive') : 'interactive';
+    const id = String(request.operationId || operationId(operation)).trim();
+    if (!/^[A-Za-z0-9._:-]{12,240}$/.test(id)) throw codedError('memory_suite_compute_operation_id_invalid', 'MEMORY_SUITE_COMPUTE_OPERATION_ID_INVALID');
+    return {
+      request,
+      descriptor,
+      operation,
+      algorithmFingerprint: descriptor.algorithmFingerprint,
+      input,
+      binding,
+      deadlineMs,
+      deadlineAt: now() + deadlineMs,
+      localReserveMs,
+      lane,
+      operationId: id
+    };
+  };
+  const preparedCacheKey = prepared => [
+    prepared.operation,
+    prepared.algorithmFingerprint,
+    prepared.input.digest,
+    prepared.binding.digest
+  ].join('|');
+  const pruneDerivedCache = () => {
+    const current = now();
+    for (const [key, entry] of state.derivedCache.entries()) {
+      if (!entry || entry.expiresAt <= current) state.derivedCache.delete(key);
+    }
+    if (state.derivedCache.size <= maxDerivedCacheEntries) return;
+    const ordered = [...state.derivedCache.entries()].sort((left, right) => left[1].cachedAt - right[1].cachedAt);
+    while (state.derivedCache.size > maxDerivedCacheEntries && ordered.length) state.derivedCache.delete(ordered.shift()[0]);
+  };
+  const cachedEnvelopeFor = async (prepared, expectedEpoch) => {
+    pruneDerivedCache();
+    const key = preparedCacheKey(prepared);
+    const cached = state.derivedCache.get(key);
+    if (!cached) {
+      state.counters.cacheMisses += 1;
+      return null;
+    }
+    try {
+      const envelope = { ...cached.envelope, bindingValidation: '' };
+      envelope.bindingValidation = await validateCurrentBinding(prepared, envelope, expectedEpoch);
+      assertActive(expectedEpoch);
+      state.counters.cacheHits += 1;
+      cached.lastUsedAt = now();
+      return Object.freeze({ ...envelope, source: 'server_cache', cachedAt: cached.cachedAt });
+    } catch (_) {
+      state.derivedCache.delete(key);
+      state.counters.cacheStale += 1;
+      return null;
+    }
+  };
+  const validateCurrentBinding = async (prepared, remoteEnvelope, expectedEpoch) => {
+    assertActive(expectedEpoch);
+    const validator = typeof prepared.request.validateBinding === 'function'
+      ? prepared.request.validateBinding
+      : (typeof options.validateBinding === 'function' ? options.validateBinding : null);
+    if (validator) {
+      const accepted = await validator(prepared.binding.value, {
+        namespace,
+        pluginId,
+        operation: prepared.operation,
+        operationId: prepared.operationId,
+        inputDigest: prepared.input.digest,
+        result: remoteEnvelope.result,
+        resultDigest: remoteEnvelope.resultDigest
+      });
+      if (accepted !== true) throw codedError('memory_suite_compute_binding_stale', 'MEMORY_SUITE_COMPUTE_BINDING_STALE');
+      return 'validator';
+    }
+    if (typeof options.bindingProvider === 'function') {
+      const current = await options.bindingProvider({ operation: prepared.operation, input: prepared.input.value, inputDigest: prepared.input.digest, revalidate: true });
+      const currentSnapshot = makeSnapshot(current === undefined ? {} : current, 'binding', maxBindingBytes);
+      if (currentSnapshot.canonical !== prepared.binding.canonical) throw codedError('memory_suite_compute_binding_stale', 'MEMORY_SUITE_COMPUTE_BINDING_STALE');
+      return 'provider_readback';
+    }
+    return 'echo_only';
+  };
+  const validateRemoteResultEnvelope = async (prepared, result, expectedEpoch) => {
+    if (!result || typeof result !== 'object' || String(result.schema || '') !== 'memory-suite.compute.result.v1') {
+      throw codedError('memory_suite_compute_response_contract_mismatch', 'MEMORY_SUITE_COMPUTE_RESULT_INVALID');
+    }
+    if (String(result.operationId || '') !== prepared.operationId
+      || String(result.namespace || '') !== namespace
+      || String(result.operation || '') !== prepared.operation
+      || String(result.algorithmFingerprint || '') !== prepared.algorithmFingerprint
+      || String(result.inputDigest || '').toLowerCase() !== prepared.input.digest) {
+      throw codedError('memory_suite_compute_response_binding_mismatch', 'MEMORY_SUITE_COMPUTE_RESULT_INVALID');
+    }
+    const responseBinding = makeSnapshot(result.binding === undefined ? {} : result.binding, 'binding', maxBindingBytes);
+    if (responseBinding.canonical !== prepared.binding.canonical) {
+      throw codedError('memory_suite_compute_binding_echo_mismatch', 'MEMORY_SUITE_COMPUTE_RESULT_INVALID');
+    }
+    const resultSnapshot = makeSnapshot(result.result, 'result', maxResultBytes);
+    if (String(result.resultDigest || '').toLowerCase() !== resultSnapshot.digest) {
+      throw codedError('memory_suite_compute_result_digest_mismatch', 'MEMORY_SUITE_COMPUTE_RESULT_DIGEST_MISMATCH');
+    }
+    if (prepared.descriptor.validateResult) {
+      const accepted = await prepared.descriptor.validateResult(resultSnapshot.value, { source: 'server', input: prepared.input.value, binding: prepared.binding.value });
+      if (accepted !== true) throw codedError('memory_suite_compute_result_validation_failed', 'MEMORY_SUITE_COMPUTE_RESULT_INVALID');
+    }
+    const envelope = {
+      result: resultSnapshot.value,
+      source: 'server',
+      operationId: prepared.operationId,
+      operation: prepared.operation,
+      inputDigest: prepared.input.digest,
+      resultDigest: resultSnapshot.digest,
+      algorithmFingerprint: prepared.algorithmFingerprint,
+      binding: prepared.binding.value,
+      bindingValidation: '',
+      timing: result.timing && typeof result.timing === 'object' ? { ...result.timing } : {},
+      jobId: String(result.jobId || '')
+    };
+    envelope.bindingValidation = await validateCurrentBinding(prepared, envelope, expectedEpoch);
+    assertActive(expectedEpoch);
+    return Object.freeze(envelope);
+  };
+  const remainingRemoteBudget = prepared => Math.floor(prepared.deadlineAt - now() - prepared.localReserveMs);
+
+  const remoteExecute = async (prepared, expectedEpoch) => {
+    assertActive(expectedEpoch);
+    let budget = remainingRemoteBudget(prepared);
+    if (budget < 25) throw codedError('memory_suite_compute_deadline_reserved_for_local', 'MEMORY_SUITE_COMPUTE_DEADLINE_RESERVED');
+    const ticket = acquireCircuit(false);
+    if (!ticket) throw codedError('memory_suite_compute_circuit_open', 'MEMORY_SUITE_COMPUTE_CIRCUIT_OPEN', { retryAt: state.circuit.openUntil });
+    state.inFlight += 1;
+    emitStatus('running_server', '', { operation: prepared.operation });
+    try {
+      let connection = await ensureComputeConnectionRaw(false, budget, expectedEpoch);
+      budget = remainingRemoteBudget(prepared);
+      if (budget < 25) throw codedError('memory_suite_compute_deadline_reserved_for_local', 'MEMORY_SUITE_COMPUTE_DEADLINE_RESERVED');
+      const advertised = connection.operations.get(prepared.operation);
+      if (!advertised || advertised.algorithmFingerprint !== prepared.algorithmFingerprint) {
+        throw codedError('memory_suite_compute_operation_unavailable', 'MEMORY_SUITE_COMPUTE_OPERATION_UNAVAILABLE');
+      }
+      const advertisedMaxDeadline = Math.max(0, Number(advertised.maxDeadlineMs || 0) || 0);
+      const globalMaxDeadline = Math.max(0, Number(connection.limits?.maxExecuteDeadlineMs || connection.limits?.maxDeadlineMs || 0) || 0);
+      const deadlineLimits = [advertisedMaxDeadline, globalMaxDeadline].filter(value => value > 0);
+      const serverMaxDeadline = deadlineLimits.length ? Math.min(...deadlineLimits) : 0;
+      const serverDeadlineMs = Math.max(1, serverMaxDeadline ? Math.min(budget, serverMaxDeadline) : budget);
+      const body = {
+        namespace,
+        operation: prepared.operation,
+        operationId: prepared.operationId,
+        algorithmFingerprint: prepared.algorithmFingerprint,
+        input: prepared.input.value,
+        inputDigest: prepared.input.digest,
+        binding: prepared.binding.value,
+        lane: prepared.lane,
+        deadlineMs: serverDeadlineMs
+      };
+      if (/^(flashback|hayaku|libra)\.memory-search\.v1$/.test(prepared.operation) && prepared.request.transportInput?.corpusId) {
+        const transport = makeSnapshot(prepared.request.transportInput, 'transport', maxInputBytes).value;
+        const corpusId = makeSnapshot(prepared.input.value.corpus, 'corpus', maxInputBytes).digest;
+        const reconstructed = { ...transport, corpus: prepared.input.value.corpus };
+        delete reconstructed.corpusId;
+        if (transport.corpusId === corpusId && makeSnapshot(reconstructed, 'transport_readback', maxInputBytes).digest === prepared.input.digest) body.input = transport;
+      }
+      let corpusRetry = true;
+      const send = async authRetry => {
+        try {
+          return await fetchJson(`${connection.url}/v1/compute/execute`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${connection.token}`,
+              'Content-Type': 'application/json',
+              'X-Memory-Suite-Plugin': pluginId,
+              'X-Memory-Suite-Plugin-Version': pluginVersion
+            },
+            body: JSON.stringify(body)
+          }, 'Librarian System compute execute', Math.max(25, remainingRemoteBudget(prepared)), expectedEpoch);
+        } catch (error) {
+          if (corpusRetry && body.input !== prepared.input.value && Number(error?.status || 0) === 410 && remainingRemoteBudget(prepared) >= 50) {
+            corpusRetry = false;
+            body.input = prepared.input.value;
+            return await send(authRetry);
+          }
+          if (authRetry && [401, 403].includes(Number(error?.status || 0)) && remainingRemoteBudget(prepared) >= 50) {
+            resetConnection();
+            connection = await ensureComputeConnectionRaw(true, remainingRemoteBudget(prepared), expectedEpoch);
+            return await send(false);
+          }
+          throw error;
+        }
+      };
+      const payload = await send(true);
+      const result = payload?.result;
+      if (payload?.schema !== 'memory-suite.compute.execute-response.v1') {
+        throw codedError('memory_suite_compute_response_contract_mismatch', 'MEMORY_SUITE_COMPUTE_RESULT_INVALID');
+      }
+      const envelope = await validateRemoteResultEnvelope(prepared, result, expectedEpoch);
+      circuitSuccess(ticket);
+      state.counters.server += 1;
+      emitStatus('ready');
+      return envelope;
+    } catch (error) {
+      circuitFailure(ticket, error);
+      if (!lifecycle.disposed) emitStatus('server_failed', error?.code || error?.message || error, { operation: prepared.operation });
+      throw error;
+    } finally {
+      state.inFlight = Math.max(0, state.inFlight - 1);
+    }
+  };
+
+  const remainingJobBudget = prepared => Math.floor(prepared.deadlineAt - now());
+  const validateJobStatus = (prepared, job) => {
+    if (!job || typeof job !== 'object' || String(job.schema || '') !== 'memory-suite.compute.job.v1') {
+      throw codedError('memory_suite_compute_job_contract_mismatch', 'MEMORY_SUITE_COMPUTE_JOB_INVALID');
+    }
+    const jobId = String(job.jobId || '');
+    if (!/^[A-Za-z0-9._:-]{8,240}$/.test(jobId)
+      || String(job.operationId || '') !== prepared.operationId
+      || String(job.namespace || '') !== namespace
+      || String(job.operation || '') !== prepared.operation
+      || String(job.algorithmFingerprint || '') !== prepared.algorithmFingerprint
+      || String(job.inputDigest || '').toLowerCase() !== prepared.input.digest) {
+      throw codedError('memory_suite_compute_job_binding_mismatch', 'MEMORY_SUITE_COMPUTE_JOB_INVALID');
+    }
+    const responseBinding = makeSnapshot(job.binding === undefined ? {} : job.binding, 'binding', maxBindingBytes);
+    if (responseBinding.canonical !== prepared.binding.canonical) {
+      throw codedError('memory_suite_compute_job_binding_echo_mismatch', 'MEMORY_SUITE_COMPUTE_JOB_INVALID');
+    }
+    return Object.freeze({ ...job, jobId });
+  };
+  const computeJobRequest = async (prepared, path, init, label, expectedSchema, expectedEpoch) => {
+    let connection = await ensureComputeConnectionRaw(false, Math.max(25, remainingJobBudget(prepared)), expectedEpoch);
+    const send = async authRetry => {
+      try {
+        const payload = await fetchJson(`${connection.url}${path}`, {
+          ...(init || {}),
+          headers: {
+            Authorization: `Bearer ${connection.token}`,
+            'X-Memory-Suite-Plugin': pluginId,
+            'X-Memory-Suite-Plugin-Version': pluginVersion,
+            ...((init && init.headers) || {})
+          }
+        }, label, Math.max(25, remainingJobBudget(prepared)), expectedEpoch);
+        if (payload?.schema !== expectedSchema) {
+          throw codedError('memory_suite_compute_job_response_contract_mismatch', 'MEMORY_SUITE_COMPUTE_JOB_INVALID');
+        }
+        return payload?.result;
+      } catch (error) {
+        if (authRetry && [401, 403].includes(Number(error?.status || 0)) && remainingJobBudget(prepared) >= 50) {
+          resetConnection();
+          connection = await ensureComputeConnectionRaw(true, remainingJobBudget(prepared), expectedEpoch);
+          return await send(false);
+        }
+        throw error;
+      }
+    };
+    return await send(true);
+  };
+  const remoteSubmitPreparedJob = async (prepared, expectedEpoch) => {
+    assertActive(expectedEpoch);
+    const ticket = acquireCircuit(false);
+    if (!ticket) throw codedError('memory_suite_compute_circuit_open', 'MEMORY_SUITE_COMPUTE_CIRCUIT_OPEN', { retryAt: state.circuit.openUntil });
+    state.inFlight += 1;
+    emitStatus('submitting_job', '', { operation: prepared.operation });
+    try {
+      const connection = await ensureComputeConnectionRaw(false, Math.max(25, remainingJobBudget(prepared)), expectedEpoch);
+      const advertised = connection.operations.get(prepared.operation);
+      if (!advertised || advertised.algorithmFingerprint !== prepared.algorithmFingerprint) {
+        throw codedError('memory_suite_compute_operation_unavailable', 'MEMORY_SUITE_COMPUTE_OPERATION_UNAVAILABLE');
+      }
+      const advertisedMaxDeadline = Math.max(0, Number(advertised.maxDeadlineMs || 0) || 0);
+      const globalMaxDeadline = Math.max(0, Number(connection.limits?.maxDeadlineMs || 0) || 0);
+      const deadlineLimits = [advertisedMaxDeadline, globalMaxDeadline].filter(value => value > 0);
+      const serverMaxDeadline = deadlineLimits.length ? Math.min(...deadlineLimits) : prepared.deadlineMs;
+      const body = {
+        namespace,
+        operation: prepared.operation,
+        operationId: prepared.operationId,
+        algorithmFingerprint: prepared.algorithmFingerprint,
+        input: prepared.input.value,
+        inputDigest: prepared.input.digest,
+        binding: prepared.binding.value,
+        lane: prepared.lane,
+        deadlineMs: Math.max(1, Math.min(prepared.deadlineMs, serverMaxDeadline))
+      };
+      const rawJob = await computeJobRequest(prepared, '/v1/compute/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }, 'Librarian System compute job submit', 'memory-suite.compute.job-response.v1', expectedEpoch);
+      const job = validateJobStatus(prepared, rawJob);
+      state.jobContexts.set(job.jobId, prepared);
+      state.counters.jobsSubmitted += 1;
+      circuitSuccess(ticket);
+      emitStatus('job_submitted', '', { operation: prepared.operation, jobId: job.jobId });
+      return job;
+    } catch (error) {
+      circuitFailure(ticket, error);
+      throw error;
+    } finally {
+      state.inFlight = Math.max(0, state.inFlight - 1);
+    }
+  };
+  const preparedForJob = jobOrId => {
+    const jobId = String(typeof jobOrId === 'string' ? jobOrId : jobOrId?.jobId || '');
+    const prepared = state.jobContexts.get(jobId);
+    if (!prepared) throw codedError('memory_suite_compute_job_context_missing', 'MEMORY_SUITE_COMPUTE_JOB_CONTEXT_MISSING', { jobId });
+    return { jobId, prepared };
+  };
+  const getPreparedJobStatus = async (jobOrId, expectedEpoch = lifecycle.epoch) => {
+    const { jobId, prepared } = preparedForJob(jobOrId);
+    const rawJob = await computeJobRequest(prepared, `/v1/compute/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'GET'
+    }, 'Librarian System compute job status', 'memory-suite.compute.job-response.v1', expectedEpoch);
+    return validateJobStatus(prepared, rawJob);
+  };
+  const getPreparedJobResult = async (jobOrId, expectedEpoch = lifecycle.epoch) => {
+    const { jobId, prepared } = preparedForJob(jobOrId);
+    const result = await computeJobRequest(prepared, `/v1/compute/jobs/${encodeURIComponent(jobId)}/result`, {
+      method: 'GET'
+    }, 'Librarian System compute job result', 'memory-suite.compute.result-response.v1', expectedEpoch);
+    const envelope = await validateRemoteResultEnvelope(prepared, result, expectedEpoch);
+    state.jobContexts.delete(jobId);
+    return envelope;
+  };
+  const cancelPreparedJob = async (jobOrId, expectedEpoch = lifecycle.epoch) => {
+    const { jobId, prepared } = preparedForJob(jobOrId);
+    const rawJob = await computeJobRequest(prepared, `/v1/compute/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST'
+    }, 'Librarian System compute job cancel', 'memory-suite.compute.cancel-response.v1', expectedEpoch);
+    const job = validateJobStatus(prepared, rawJob);
+    if (['succeeded', 'failed', 'cancelled', 'expired'].includes(String(job.state || ''))) state.jobContexts.delete(jobId);
+    return job;
+  };
+  const waitForPreparedJob = async (jobOrId, waitOptions = {}, expectedEpoch = lifecycle.epoch) => {
+    const intervalMs = Math.max(25, Math.min(2000, Number(waitOptions.pollIntervalMs || jobPollIntervalMs) || jobPollIntervalMs));
+    while (true) {
+      assertActive(expectedEpoch);
+      const statusResult = await getPreparedJobStatus(jobOrId, expectedEpoch);
+      const jobState = String(statusResult.state || '');
+      if (jobState === 'succeeded') return await getPreparedJobResult(statusResult, expectedEpoch);
+      if (['failed', 'cancelled', 'expired'].includes(jobState)) {
+        state.jobContexts.delete(statusResult.jobId);
+        throw codedError(statusResult.error || `memory_suite_compute_job_${jobState}`, statusResult.code || 'MEMORY_SUITE_COMPUTE_JOB_FAILED', { jobId: statusResult.jobId, state: jobState });
+      }
+      const { prepared } = preparedForJob(statusResult);
+      if (remainingJobBudget(prepared) <= 25) {
+        try { await cancelPreparedJob(statusResult, expectedEpoch); } catch (_) {}
+        throw codedError('memory_suite_compute_job_wait_deadline', 'MEMORY_SUITE_COMPUTE_TIMEOUT', { jobId: statusResult.jobId });
+      }
+      await backgroundDelay(Math.min(intervalMs, Math.max(25, remainingJobBudget(prepared) - 1)), expectedEpoch);
+    }
+  };
+  const submitJob = async rawRequest => {
+    const epoch = lifecycle.epoch;
+    assertActive(epoch);
+    const mode = rawRequest?.mode === undefined ? await readMode(false) : normalizeMode(rawRequest.mode);
+    if (mode === MODE_LOCAL) return Object.freeze({ scheduled: false, skipped: true, reason: 'local_mode', mode });
+    const prepared = await prepareCall(rawRequest);
+    return await remoteSubmitPreparedJob(prepared, epoch);
+  };
+  const getJobStatus = async jobOrId => await getPreparedJobStatus(jobOrId, lifecycle.epoch);
+  const getJobResult = async jobOrId => await getPreparedJobResult(jobOrId, lifecycle.epoch);
+  const cancelJob = async jobOrId => await cancelPreparedJob(jobOrId, lifecycle.epoch);
+  const waitForJob = async (jobOrId, waitOptions = {}) => await waitForPreparedJob(jobOrId, waitOptions, lifecycle.epoch);
+  const schedulePreparedJob = (prepared, expectedEpoch) => {
+    const key = preparedCacheKey(prepared);
+    const existing = state.jobRuns.get(key);
+    if (existing) return existing;
+    const task = trackBackgroundTask((async () => {
+      try {
+        const job = await remoteSubmitPreparedJob(prepared, expectedEpoch);
+        const envelope = await waitForPreparedJob(job, {}, expectedEpoch);
+        const cachedAt = now();
+        state.derivedCache.set(key, { envelope, cachedAt, lastUsedAt: cachedAt, expiresAt: cachedAt + derivedCacheTtlMs });
+        pruneDerivedCache();
+        state.counters.jobsSucceeded += 1;
+        const callback = typeof prepared.request.onDerivedResult === 'function'
+          ? prepared.request.onDerivedResult
+          : (typeof options.onDerivedResult === 'function' ? options.onDerivedResult : null);
+        if (callback) await callback(envelope, { cacheKey: key, cachedAt });
+        emitStatus('job_cached', '', { operation: prepared.operation, jobId: envelope.jobId });
+        return envelope;
+      } catch (error) {
+        state.counters.jobsFailed += 1;
+        if (!lifecycle.disposed) emitStatus('job_failed', error?.code || error?.message || error, { operation: prepared.operation });
+        throw error;
+      } finally {
+        state.jobRuns.delete(key);
+      }
+    })());
+    state.jobRuns.set(key, task);
+    return task;
+  };
+  const prime = async rawRequest => {
+    const epoch = lifecycle.epoch;
+    assertActive(epoch);
+    const mode = rawRequest?.mode === undefined ? await readMode(false) : normalizeMode(rawRequest.mode);
+    if (mode === MODE_LOCAL) return Object.freeze({ scheduled: false, skipped: true, reason: 'local_mode', mode });
+    const prepared = await prepareCall(rawRequest);
+    const cached = await cachedEnvelopeFor(prepared, epoch);
+    if (cached) return cached;
+    return await schedulePreparedJob(prepared, epoch);
+  };
+  const clearDerivedCache = operationValue => {
+    const operation = String(operationValue || '').trim();
+    let removed = 0;
+    for (const key of [...state.derivedCache.keys()]) {
+      if (!operation || key.startsWith(`${operation}|`)) {
+        state.derivedCache.delete(key);
+        removed += 1;
+      }
+    }
+    return removed;
+  };
+
+  const localExecute = async (prepared, expectedEpoch, fallbackReason = '') => {
+    assertActive(expectedEpoch);
+    const startedAt = now();
+    const rawResult = await prepared.descriptor.local(prepared.input.value, {
+      namespace,
+      pluginId,
+      operation: prepared.operation,
+      operationId: prepared.operationId,
+      algorithmFingerprint: prepared.algorithmFingerprint,
+      inputDigest: prepared.input.digest,
+      binding: prepared.binding.value,
+      deadlineAt: prepared.deadlineAt,
+      localReserveMs: prepared.localReserveMs
+    });
+    assertActive(expectedEpoch);
+    const resultSnapshot = makeSnapshot(rawResult, 'result', maxResultBytes);
+    if (prepared.descriptor.validateResult) {
+      const accepted = await prepared.descriptor.validateResult(resultSnapshot.value, { source: 'local', input: prepared.input.value, binding: prepared.binding.value });
+      if (accepted !== true) throw codedError('memory_suite_compute_local_result_validation_failed', 'MEMORY_SUITE_COMPUTE_LOCAL_RESULT_INVALID');
+    }
+    state.counters.local += 1;
+    if (fallbackReason) state.counters.fallbacks += 1;
+    emitStatus('local_ready', fallbackReason, { operation: prepared.operation });
+    return Object.freeze({
+      result: resultSnapshot.value,
+      source: 'local',
+      operationId: prepared.operationId,
+      operation: prepared.operation,
+      inputDigest: prepared.input.digest,
+      resultDigest: resultSnapshot.digest,
+      algorithmFingerprint: prepared.algorithmFingerprint,
+      binding: prepared.binding.value,
+      bindingValidation: 'local_owner',
+      timing: { clientMs: Math.max(0, now() - startedAt) },
+      jobId: '',
+      fallbackReason: compact(fallbackReason, 300)
+    });
+  };
+
+  const execute = async rawRequest => {
+    const epoch = lifecycle.epoch;
+    assertActive(epoch);
+    const prepared = await prepareCall(rawRequest);
+    assertActive(epoch);
+    const mode = rawRequest?.mode === undefined ? await readMode(false) : normalizeMode(rawRequest.mode);
+    let localPromise = null;
+    const runLocalOnce = fallbackReason => {
+      if (!localPromise) localPromise = Promise.resolve().then(() => localExecute(prepared, epoch, fallbackReason));
+      return localPromise;
+    };
+    if (mode === MODE_LOCAL) return await runLocalOnce('');
+    try {
+      return await remoteExecute(prepared, epoch);
+    } catch (error) {
+      if (lifecycle.disposed || epoch !== lifecycle.epoch || error?.code === 'MEMORY_SUITE_COMPUTE_BRIDGE_DISPOSED') throw error;
+      return await runLocalOnce(error?.code || error?.message || 'memory_suite_compute_server_fallback');
+    }
+  };
+  const getDerivedResult = async rawRequest => {
+    const epoch = lifecycle.epoch;
+    assertActive(epoch);
+    const prepared = await prepareCall(rawRequest);
+    return await cachedEnvelopeFor(prepared, epoch);
+  };
+  const executeCachedOrLocal = async rawRequest => {
+    const epoch = lifecycle.epoch;
+    assertActive(epoch);
+    const prepared = await prepareCall(rawRequest);
+    const mode = rawRequest?.mode === undefined ? await readMode(false) : normalizeMode(rawRequest.mode);
+    let localPromise = null;
+    const runLocalOnce = fallbackReason => {
+      if (!localPromise) localPromise = Promise.resolve().then(() => localExecute(prepared, epoch, fallbackReason));
+      return localPromise;
+    };
+    if (mode === MODE_LOCAL) return await runLocalOnce('');
+    const cached = await cachedEnvelopeFor(prepared, epoch);
+    if (cached) return cached;
+    const remote = schedulePreparedJob(prepared, epoch);
+    remote.catch(() => null);
+    return await runLocalOnce('MEMORY_SUITE_COMPUTE_CACHE_MISS');
+  };
+
+  const whenIdle = async () => {
+    const pending = [...lifecycle.background];
+    if (pending.length) await Promise.allSettled(pending);
+    return status();
+  };
+  const cancelOutstandingJobsBeforeDispose = async expectedEpoch => {
+    const jobIds = [...state.jobContexts.keys()];
+    if (!jobIds.length || disposeCancelGraceMs <= 0) return;
+    const cancellations = Promise.allSettled(jobIds.map(jobId => (
+      cancelPreparedJob(jobId, expectedEpoch).catch(() => null)
+    )));
+    let timer = null;
+    try {
+      await Promise.race([
+        cancellations,
+        new Promise(resolve => { timer = setTimeout(resolve, disposeCancelGraceMs); })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  const dispose = async () => {
+    if (lifecycle.disposed) return false;
+    const epoch = lifecycle.epoch;
+    try { await cancelOutstandingJobsBeforeDispose(epoch); } catch (_) {}
+    lifecycle.disposed = true;
+    lifecycle.epoch += 1;
+    for (const timer of [...lifecycle.timers]) clearTimeout(timer);
+    lifecycle.timers.clear();
+    for (const controller of [...lifecycle.abortControllers]) {
+      try { controller.abort(); } catch (_) {}
+    }
+    lifecycle.abortControllers.clear();
+    state.listeners.clear();
+    state.jobContexts.clear();
+    state.jobRuns.clear();
+    state.derivedCache.clear();
+    state.connection = { value: null, at: 0, pending: null };
+    state.status = { state: 'disposed', reason: '', at: now() };
+    return true;
+  };
+
+  const bridge = Object.freeze({
+    namespace,
+    pluginId,
+    modes: Object.freeze({ local: MODE_LOCAL, preferServer: MODE_PREFER_SERVER }),
+    execute,
+    executeCachedOrLocal,
+    prime,
+    submitJob,
+    getJobStatus,
+    getJobResult,
+    waitForJob,
+    cancelJob,
+    getDerivedResult,
+    clearDerivedCache,
+    probe,
+    scheduleProbe,
+    getMode: readMode,
+    setMode,
+    status,
+    subscribe,
+    whenIdle,
+    dispose
+  });
+  scheduleProbe();
+  return bridge;
 };
 
 const memorySuiteLiaCurrentScope = async () => {
@@ -4985,7 +7486,14 @@ const memorySuiteLiaCurrentScope = async () => {
   };
 };
 const memorySuiteLiaParse = value => {
-  if (typeof value === 'string') { try { return { object: JSON.parse(value), string: true }; } catch (_) { return { object: {}, string: true }; } }
+  if (typeof value === 'string') {
+    try { return { object: JSON.parse(value), string: true }; }
+    catch (cause) {
+      const error = new Error(`lia_storage_json_invalid:${String(cause?.message || cause)}`);
+      error.code = 'LIA_STORAGE_JSON_INVALID';
+      throw error;
+    }
+  }
   return { object: value && typeof value === 'object' && !Array.isArray(value) ? value : {}, string: false };
 };
 const memorySuiteLiaScopedEnvelope = (field, scope) => ({
@@ -4994,18 +7502,314 @@ const memorySuiteLiaScopedEnvelope = (field, scope) => ({
   mergeValue: (remoteValue, localValue) => { const remote=memorySuiteLiaParse(remoteValue),local=memorySuiteLiaParse(localValue); const out={...local.object,...Object.fromEntries(Object.entries(remote.object).filter(([k])=>k!==field)),[field]:{...(local.object?.[field]||{}),...(remote.object?.[field]||{})}}; return local.string||remote.string?JSON.stringify(out):out; },
   removeValue: localValue => { const local=memorySuiteLiaParse(localValue); const rows={...(local.object?.[field]||{})}; delete rows[scope.scopeId]; const out={...local.object,[field]:rows}; return local.string?JSON.stringify(out):out; }
 });
-const memorySuiteLiaResolveKeyScope = async ({ key, currentScope }) => {
+const LIA_SHARED_DURABLE_RESTORE_KEYS = Object.freeze(new Set([
+  RESULT_VAULT_STORAGE_KEY,
+  WORLD_BLUEPRINT_STORAGE_KEY,
+  LIVE_PERSONA_STORAGE_KEY,
+  PERSONA_VISUAL_ASSET_STORAGE_KEY,
+  PERSONA_VISUAL_ASSET_PRESET_STORAGE_KEY
+]));
+const memorySuiteLiaIsSharedDurableRestoreKey = key => LIA_SHARED_DURABLE_RESTORE_KEYS.has(String(key || ''))
+  || String(key || '').startsWith(PERSONA_VISUAL_ASSET_BACKUP_PREFIX);
+const memorySuiteLiaIsRecognizedRestoreKey = key => {
+  const value = String(key || '');
+  return value === LIVE_PERSONA_INDEX_STORAGE_KEY
+    || value === PERSONA_PROOF_STORAGE_KEY
+    || value.startsWith(LIVE_PERSONA_SCOPE_STORAGE_PREFIX)
+    || memorySuiteLiaIsSharedDurableRestoreKey(value);
+};
+const memorySuiteLiaSharedDurableRoute = key => ({
+  kind:'shared',
+  includeInScopeSync:true,
+  metadata:{ owner:'lia', restoreClass:'shared_durable', logicalKey:String(key || '') }
+});
+const memorySuiteLiaResolveKeyScope = async ({ key, currentScope, registry }) => {
   const scope = currentScope || null;
   if (key === LLM_CONFIG_STORAGE_KEY || key === LOG_STORAGE_KEY) return { kind: 'global' };
   if (key.startsWith(LIVE_PERSONA_SCOPE_STORAGE_PREFIX)) {
-    const scopeId = key.slice(LIVE_PERSONA_SCOPE_STORAGE_PREFIX.length);
-    return scope?.scopeId === scopeId ? { kind:'scope',...scope } : { kind:'scope',scopeId,scopeKey:scopeId,aliases:[scopeId],label:scopeId };
+    const storageSuffix = key.slice(LIVE_PERSONA_SCOPE_STORAGE_PREFIX.length);
+    const candidates = [scope, ...Object.values(registry?.entries || {})].filter(item => item?.scopeId);
+    const owner = candidates.find(item => hashText(String(item.scopeKey || item.scopeId || '')).slice(0, 24) === storageSuffix);
+    if (owner) return { kind:'scope',...owner };
+    // A hashed shard cannot safely be assigned to the open chat merely because
+    // its owner is absent from the registry. Keep it under an isolated alias;
+    // the scoped index dependency resolver can still restore the exact shard.
+    return { kind:'scope',scopeId:`lia-shard:${storageSuffix}`,scopeKey:`lia-shard:${storageSuffix}`,aliases:[storageSuffix],label:`LIA shard ${storageSuffix}` };
   }
   if (key === LIVE_PERSONA_INDEX_STORAGE_KEY) return scope?.scopeId ? memorySuiteLiaScopedEnvelope('entries', scope) : null;
   if (key === PERSONA_PROOF_STORAGE_KEY) return scope?.scopeId ? memorySuiteLiaScopedEnvelope('proofs', scope) : null;
-  if ([RESULT_VAULT_STORAGE_KEY, WORLD_BLUEPRINT_STORAGE_KEY, LIVE_PERSONA_STORAGE_KEY, PERSONA_VISUAL_ASSET_STORAGE_KEY, PERSONA_VISUAL_ASSET_PRESET_STORAGE_KEY].includes(key) || key.startsWith(PERSONA_VISUAL_ASSET_BACKUP_PREFIX)) return { kind:'shared' };
+  if (memorySuiteLiaIsSharedDurableRestoreKey(key)) {
+    // These stores are plugin-global durable user data, not one chat's private
+    // state. Opt them into every server-backed scope's explicit sync/restore
+    // transaction so a total browser/pluginStorage loss can be recovered from
+    // the server. The common SDK still keeps plugin_only as a zero-network
+    // boundary, applies server tombstones, captures rollback originals and never
+    // deletes shared rows during one-scope cleanup.
+    return memorySuiteLiaSharedDurableRoute(key);
+  }
   return { kind:'global' };
 };
+const memorySuiteLiaRestoreRaw = value => value && typeof value === 'object' && !Array.isArray(value)
+  && Object.prototype.hasOwnProperty.call(value, 'exists') ? value.value : value;
+const memorySuiteLiaRestoreJson = value => {
+  const raw = memorySuiteLiaRestoreRaw(value);
+  if (typeof raw !== 'string') return raw;
+  try { return JSON.parse(raw); }
+  catch (cause) {
+    const error = new Error(`lia_storage_json_invalid:${String(cause?.message || cause)}`);
+    error.code = 'LIA_STORAGE_JSON_INVALID';
+    throw error;
+  }
+};
+const memorySuiteLiaRestoreObject = value => {
+  const parsed = memorySuiteLiaRestoreJson(value);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+  return parsed;
+};
+const memorySuiteLiaRestoreArrayOrItems = value => {
+  const parsed = memorySuiteLiaRestoreJson(value);
+  if (Array.isArray(parsed)) return { parsed, items:parsed };
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.items)) return { parsed, items:parsed.items };
+  return { parsed, items:null };
+};
+async function memorySuiteLiaResolveRestoreDependencies(context = {}) {
+  const candidates = Array.isArray(context.serverCandidates) ? context.serverCandidates : [];
+  const indexRow = candidates.find(row => row?.space === 'plugin' && row?.logicalKey === LIVE_PERSONA_INDEX_STORAGE_KEY);
+  if (!indexRow) return { dependencies:[], warnings:['lia_restore_index_root_absent'], metrics:{ livePersonaShard:0 } };
+  const index = memorySuiteLiaRestoreObject(await context.serverRead('plugin', indexRow.remoteKey));
+  if (String(index.schema || '') !== LIVE_PERSONA_INDEX_SCHEMA || !index.entries || typeof index.entries !== 'object' || Array.isArray(index.entries)) {
+    throw new Error('lia_restore_live_persona_index_invalid');
+  }
+  const scopeKey = String(context?.scope?.scopeKey || context?.scope?.scopeId || '');
+  const entry = index.entries[scopeKey];
+  if (!entry) return { dependencies:[], metrics:{ livePersonaShard:0, indexPresent:true } };
+  const storageKey = String(entry.storageKey || '');
+  if (!storageKey.startsWith(LIVE_PERSONA_SCOPE_STORAGE_PREFIX)) throw new Error('lia_restore_live_persona_storage_key_invalid');
+  return { dependencies:[{ space:'plugin', remoteKey:storageKey, logicalKey:storageKey, reason:'lia.current_scope_index.storageKey' }], metrics:{ livePersonaShard:1, indexPresent:true } };
+}
+async function memorySuiteLiaValidateRestore(context = {}) {
+  if (String(context.phase || '') !== 'complete') return { ok:true, warnings:['lia_owner_validation_deferred_until_complete'] };
+  const errors = [];
+  const warnings = [];
+  const scopeKey = String(context?.scope?.scopeKey || context?.scope?.scopeId || '');
+  const candidates = Array.isArray(context.serverCandidates) ? context.serverCandidates : [];
+  const candidateKeys = new Set(candidates.filter(row => row?.space === 'plugin').map(row => String(row?.logicalKey || '')));
+  const removedKeys = new Set((Array.isArray(context.removedKeys) ? context.removedKeys : [])
+    .filter(row => !row?.space || row.space === 'plugin')
+    .map(row => String(row?.key || row?.logicalKey || row || ''))
+    .filter(Boolean));
+  const recognizedCandidates = Array.from(candidateKeys).filter(memorySuiteLiaIsRecognizedRestoreKey);
+  const recognizedRemoved = Array.from(removedKeys).filter(memorySuiteLiaIsRecognizedRestoreKey);
+  const metrics = {
+    candidates:candidates.length,
+    scopeKey,
+    recognizedCandidates:recognizedCandidates.length,
+    recognizedRemoved:recognizedRemoved.length,
+    indexedBinding:false,
+    sharedStores:0,
+    sharedStoreItems:0,
+    sharedTombstones:recognizedRemoved.filter(memorySuiteLiaIsSharedDurableRestoreKey).length,
+    visualAssetBackupManifests:0,
+    visualAssetBackupChunks:0,
+    visualAssetBackupBytes:0,
+    cacheInvalidated:false
+  };
+  if (recognizedCandidates.length === 0 && recognizedRemoved.length === 0) {
+    errors.push('lia_restore_snapshot_empty');
+  }
+  const physicalRead = async key => await context.readback('plugin', String(key || ''));
+  const validateSharedJson = async (key, validator) => {
+    if (!candidateKeys.has(key)) return null;
+    let raw;
+    try {
+      raw = await physicalRead(key);
+      await validator(raw);
+      metrics.sharedStores += 1;
+      return raw;
+    } catch (error) {
+      errors.push({ code:'lia_restore_shared_store_invalid', key, detail:String(error?.message || error) });
+      return null;
+    }
+  };
+
+  const indexRow = candidates.find(row => row?.space === 'plugin' && row?.logicalKey === LIVE_PERSONA_INDEX_STORAGE_KEY);
+  let index = null;
+  if (indexRow) {
+    try { index = memorySuiteLiaRestoreObject(await physicalRead(LIVE_PERSONA_INDEX_STORAGE_KEY)); }
+    catch (error) { errors.push({ code:'lia_restore_index_json_invalid', detail:String(error?.message || error) }); }
+    if (index && (String(index.schema || '') !== LIVE_PERSONA_INDEX_SCHEMA || !index.entries || typeof index.entries !== 'object' || Array.isArray(index.entries))) errors.push('lia_restore_index_schema_invalid');
+  }
+  const entry = index?.entries?.[scopeKey] || null;
+  metrics.indexedBinding = Boolean(entry);
+  if (entry) {
+    const storageKey = String(entry.storageKey || '');
+    if (!storageKey.startsWith(LIVE_PERSONA_SCOPE_STORAGE_PREFIX)) errors.push('lia_restore_binding_storage_key_invalid');
+    if (!candidateKeys.has(storageKey)) errors.push({ code:'lia_restore_binding_dependency_missing', key:storageKey });
+    let raw = null;
+    let binding = null;
+    try {
+      raw = await physicalRead(storageKey);
+      binding = memorySuiteLiaRestoreObject(raw);
+    } catch (error) { errors.push({ code:'lia_restore_binding_json_invalid', key:storageKey, detail:String(error?.message || error) }); }
+    if (!binding || String(binding.scopeKey || '') !== scopeKey) errors.push('lia_restore_binding_scope_mismatch');
+    if (typeof raw === 'string' && entry.digest && hashText(raw) !== String(entry.digest)) errors.push('lia_restore_binding_digest_mismatch');
+  }
+  for (const row of candidates.filter(item => item?.space === 'plugin' && item?.logicalKey === PERSONA_PROOF_STORAGE_KEY)) {
+    try {
+      const proof = memorySuiteLiaRestoreObject(await physicalRead(row.logicalKey));
+      if (proof.proofs && typeof proof.proofs !== 'object') errors.push('lia_restore_proof_store_invalid');
+    } catch (error) { errors.push({ code:'lia_restore_proof_json_invalid', detail:String(error?.message || error) }); }
+  }
+
+  await validateSharedJson(RESULT_VAULT_STORAGE_KEY, async raw => {
+    const { parsed, items } = memorySuiteLiaRestoreArrayOrItems(raw);
+    if (!Array.isArray(items) || items.some(item => !item || typeof item !== 'object' || Array.isArray(item))) throw new Error('lia_restore_result_vault_items_invalid');
+    if (!Array.isArray(parsed) && parsed?.version != null && Number(parsed.version) !== 1) throw new Error('lia_restore_result_vault_version_invalid');
+    const normalized = normalizeResultVault(parsed);
+    const meaningful = items.filter(item => item && typeof item === 'object' && String(item.personaPrompt || item.persona_prompt || '').trim()).length;
+    if (meaningful > 0 && normalized.length === 0) throw new Error('lia_restore_result_vault_normalization_empty');
+    metrics.sharedStoreItems += normalized.length;
+  });
+
+  await validateSharedJson(WORLD_BLUEPRINT_STORAGE_KEY, async raw => {
+    const parsed = memorySuiteLiaRestoreJson(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.items)
+      || parsed.items.some(item => !item || typeof item !== 'object' || Array.isArray(item) || !String(item.key || '').trim() || !item.blueprint || typeof item.blueprint !== 'object')) {
+      throw new Error('lia_restore_world_blueprint_items_invalid');
+    }
+    if (parsed.version != null && Number(parsed.version) !== 1) throw new Error('lia_restore_world_blueprint_version_invalid');
+    const normalized = normalizeWorldBlueprintVault(parsed);
+    if (parsed.items.length > 0 && normalized.length === 0) throw new Error('lia_restore_world_blueprint_normalization_empty');
+    metrics.sharedStoreItems += normalized.length;
+  });
+
+  await validateSharedJson(LIVE_PERSONA_STORAGE_KEY, async raw => {
+    const parsed = memorySuiteLiaRestoreJson(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('lia_restore_legacy_live_persona_store_invalid');
+    if (parsed.version != null && Number(parsed.version) > PERSONA_BINDING_MANAGER_VERSION) throw new Error('lia_restore_legacy_live_persona_future_version');
+    if (parsed.bindings != null && (!parsed.bindings || typeof parsed.bindings !== 'object' || Array.isArray(parsed.bindings))) throw new Error('lia_restore_legacy_live_persona_bindings_invalid');
+    const sourceBindings = parsed.bindings && typeof parsed.bindings === 'object' && !Array.isArray(parsed.bindings) ? Object.keys(parsed.bindings) : [];
+    const normalized = normalizeLivePersonaStore(parsed);
+    if (sourceBindings.length > 0 && Object.keys(normalized.bindings || {}).length === 0) throw new Error('lia_restore_legacy_live_persona_normalization_empty');
+    metrics.sharedStoreItems += Object.keys(normalized.bindings || {}).length;
+  });
+
+  let restoredVisualAssetStore = null;
+  await validateSharedJson(PERSONA_VISUAL_ASSET_STORAGE_KEY, async raw => {
+    const parsed = memorySuiteLiaRestoreJson(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !parsed.sets || typeof parsed.sets !== 'object' || Array.isArray(parsed.sets)
+      || Object.values(parsed.sets).some(set => !set || typeof set !== 'object' || Array.isArray(set))) throw new Error('lia_restore_visual_asset_store_invalid');
+    if (parsed.version != null && Number(parsed.version) > PERSONA_VISUAL_ASSET_VERSION) throw new Error('lia_restore_visual_asset_future_version');
+    const normalized = normalizePersonaVisualAssetStore(parsed);
+    if (Object.keys(parsed.sets).length > 0 && Object.keys(normalized.sets || {}).length === 0) throw new Error('lia_restore_visual_asset_normalization_empty');
+    restoredVisualAssetStore = normalized;
+    metrics.sharedStoreItems += Object.keys(normalized.sets || {}).length;
+  });
+
+  let restoredPresetStore = null;
+  await validateSharedJson(PERSONA_VISUAL_ASSET_PRESET_STORAGE_KEY, async raw => {
+    const parsed = memorySuiteLiaRestoreJson(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.items)
+      || parsed.items.some(item => !item || typeof item !== 'object' || Array.isArray(item) || !String(item.name || '').trim())) throw new Error('lia_restore_visual_asset_preset_items_invalid');
+    if (parsed.version != null && Number(parsed.version) > PERSONA_VISUAL_ASSET_PRESET_VERSION) throw new Error('lia_restore_visual_asset_preset_future_version');
+    const normalized = normalizeVisualAssetPresetStore(parsed);
+    if (parsed.items.length > 0 && normalized.items.length === 0) throw new Error('lia_restore_visual_asset_preset_normalization_empty');
+    restoredPresetStore = normalized;
+    metrics.sharedStoreItems += normalized.items.length;
+  });
+
+  const visualBackupKeys = Array.from(candidateKeys).filter(key => key.startsWith(PERSONA_VISUAL_ASSET_BACKUP_PREFIX));
+  const manifestSuffix = '::manifest';
+  const chunkMarker = '::chunk::';
+  const manifestKeys = visualBackupKeys.filter(key => key.endsWith(manifestSuffix)).sort();
+  const manifestByBackupId = new Map();
+  for (const manifestKey of manifestKeys) {
+    const backupId = manifestKey.slice(PERSONA_VISUAL_ASSET_BACKUP_PREFIX.length, -manifestSuffix.length);
+    if (!backupId) { errors.push({ code:'lia_restore_visual_asset_backup_id_missing', key:manifestKey }); continue; }
+    let manifest = null;
+    try {
+      manifest = memorySuiteLiaRestoreObject(await physicalRead(manifestKey));
+    } catch (error) {
+      errors.push({ code:'lia_restore_visual_asset_backup_manifest_json_invalid', key:manifestKey, detail:String(error?.message || error) });
+      continue;
+    }
+    const chunks = Math.max(0, Number(manifest?.chunks || 0) || 0);
+    const expectedBytes = Math.max(0, Number(manifest?.bytes || 0) || 0);
+    const expectedChars = Math.max(0, Number(manifest?.base64Chars || 0) || 0);
+    if (Number(manifest?.version || 0) !== PERSONA_VISUAL_ASSET_BACKUP_VERSION || chunks < 1 || expectedBytes < 1 || expectedChars < 1) {
+      errors.push({ code:'lia_restore_visual_asset_backup_manifest_invalid', key:manifestKey });
+      continue;
+    }
+    let actualChars = 0;
+    let actualBytes = 0;
+    let chunkValid = true;
+    for (let index = 0; index < chunks; index += 1) {
+      const chunkKey = `${PERSONA_VISUAL_ASSET_BACKUP_PREFIX}${backupId}${chunkMarker}${index}`;
+      if (!candidateKeys.has(chunkKey)) {
+        errors.push({ code:'lia_restore_visual_asset_backup_chunk_dependency_missing', key:chunkKey, backupId, index });
+        chunkValid = false;
+        continue;
+      }
+      try {
+        const part = memorySuiteLiaRestoreRaw(await physicalRead(chunkKey));
+        if (typeof part !== 'string' || !part || !/^[A-Za-z0-9+/]*={0,2}$/.test(part) || part.length % 4 !== 0) throw new Error('invalid_base64_chunk');
+        actualChars += part.length;
+        // Backup chunks are written at a 480,000-character boundary, which is
+        // divisible by four. Decode one chunk at a time so large image backups
+        // are validated without constructing a second full-size Base64 string.
+        actualBytes += atob(part).length;
+        metrics.visualAssetBackupChunks += 1;
+      } catch (error) {
+        errors.push({ code:'lia_restore_visual_asset_backup_chunk_invalid', key:chunkKey, backupId, index, detail:String(error?.message || error) });
+        chunkValid = false;
+      }
+    }
+    if (chunkValid && (actualChars !== expectedChars || actualBytes !== expectedBytes)) {
+      errors.push({ code:'lia_restore_visual_asset_backup_size_mismatch', backupId, expectedChars, actualChars, expectedBytes, actualBytes });
+      continue;
+    }
+    if (chunkValid) {
+      manifestByBackupId.set(backupId, manifest);
+      metrics.visualAssetBackupManifests += 1;
+      metrics.visualAssetBackupBytes += actualBytes;
+    }
+  }
+
+  for (const key of visualBackupKeys.filter(key => key.includes(chunkMarker))) {
+    const tail = key.slice(PERSONA_VISUAL_ASSET_BACKUP_PREFIX.length);
+    const backupId = tail.split(chunkMarker)[0];
+    if (backupId && !manifestByBackupId.has(backupId)) warnings.push({ code:'lia_restore_visual_asset_orphan_chunk', key, backupId });
+  }
+
+  if (restoredVisualAssetStore) {
+    for (const [personaKey, set] of Object.entries(restoredVisualAssetStore.sets || {})) {
+      for (const [emotion, image] of Object.entries(set?.images || {})) {
+        const backupId = String(image?.backupId || '').trim();
+        if (!backupId) continue;
+        const manifestKey = visualAssetBackupManifestKey(backupId);
+        if (!candidateKeys.has(manifestKey) || !manifestByBackupId.has(backupId)) {
+          errors.push({ code:'lia_restore_visual_asset_referenced_backup_missing', personaKey, emotion, backupId, manifestKey });
+        }
+      }
+    }
+  }
+
+  if (errors.length === 0) {
+    // Storage validation is read-only; invalidating RAM/UI caches merely ensures
+    // the next read observes the freshly restored pluginStorage rows rather than
+    // pre-recovery objects. No Persona, chat or durable store is mutated here.
+    cachedLivePersonaStore = null;
+    cachedLivePersonaStoreComplete = false;
+    livePersonaStorePromise = null;
+    cachedPersonaProofStore = null;
+    personaProofStorePromise = null;
+    cachedPersonaVisualAssetStoreEmpty = null;
+    if (restoredPresetStore) preservedVisualAssetPresetStore = restoredPresetStore;
+    metrics.cacheInvalidated = true;
+  }
+
+  return { ok:errors.length === 0, errors, warnings, metrics };
+}
 const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   namespace:'lia', displayName:'LIA: Persona Linker', pluginId:'lia_persona_linker', pluginVersion:PLUGIN_VERSION, managementButton:false,
   pluginKeys:[LLM_CONFIG_STORAGE_KEY,RESULT_VAULT_STORAGE_KEY,WORLD_BLUEPRINT_STORAGE_KEY,LIVE_PERSONA_STORAGE_KEY,LIVE_PERSONA_INDEX_STORAGE_KEY,PERSONA_PROOF_STORAGE_KEY,LOG_STORAGE_KEY,PERSONA_VISUAL_ASSET_STORAGE_KEY,PERSONA_VISUAL_ASSET_PRESET_STORAGE_KEY],
@@ -5013,7 +7817,14 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   excludedKeys:[LLM_SECRET_STORAGE_KEY,LLM_SECRET_SYNCED_STORAGE_KEY,ILLUSTRATION_CONFIG_STORAGE_KEY],
   excludedContains:['secret','credential','api_key','access_token','hosting_token'],
   currentScopeProvider:memorySuiteLiaCurrentScope, resolveKeyScope:memorySuiteLiaResolveKeyScope,
-  preResolveKeyScope:true
+  preResolveKeyScope:true,
+  resolveRestoreDependencies:memorySuiteLiaResolveRestoreDependencies,
+  validateRestore:memorySuiteLiaValidateRestore,
+  requireRestoreValidation:true,
+  // LIA can have durable plugin-global Vault/Blueprint/asset data even when the
+  // current chat has no Live Persona shard. The owner validator above rejects a
+  // truly empty snapshot, so dependency/tombstone-only recovery remains fail-closed.
+  allowEmptyRestore:true
 });
 
 
@@ -5120,33 +7931,76 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     let priority = 0;
     if (entry?.alwaysActive) { reasons.push("alwaysActive"); priority += 120; }
     if (entry?.mode === "constant") { reasons.push("constant"); priority += 110; }
-    if (/(?:world|setting|canon|rules?|law|species|race|naming|name rule|power system|magic system|technology|social structure|hierarchy|class system|religion|geography|timeline|세계관|세계 규칙|설정|캐논|규칙|법률|법칙|종족|작명|이름 규칙|능력 체계|마법 체계|기술 수준|사회 구조|계급|신분|종교|지리|연표)/i.test(meta)) {
-      reasons.push("world_rule_header"); priority += 90;
-    }
+    const worldRuleHeader = /(?:world|setting|canon|rules?|law|species|race|naming|name rule|power system|magic system|technology|social structure|hierarchy|class system|religion|geography|timeline|세계관|세계 규칙|설정|캐논|규칙|법률|법칙|종족|작명|이름 규칙|능력 체계|마법 체계|기술 수준|사회 구조|계급|신분|종교|지리|연표)/i.test(meta);
+    if (worldRuleHeader) { reasons.push("world_rule_header"); priority += 90; }
     const hasHardNegation = /(?:only humans?|human[- ]only|does not exist|do not exist|cannot exist|forbidden|prohibited|impossible|must not|never exists?|인간만|오직 인간|존재하지 않|없음|없다|금지|불가능|허용되지 않|해서는 안|할 수 없)/i.test(all);
     const hasWorldDomain = /(?:species|race|magic|power|ability|technology|law|rule|world|setting|social|class|naming|language|종족|마법|능력|기술|법|규칙|세계|설정|사회|계급|신분|작명|언어)/i.test(all);
-    if (hasHardNegation && hasWorldDomain) { reasons.push("hard_constraint"); priority += 100; }
-    return { protected: reasons.length > 0, reasons: unique(reasons, 8), priority };
+    const hard = hasHardNegation && hasWorldDomain;
+    if (hard) { reasons.push("hard_constraint"); priority += 140; }
+    const soft = !hard && (entry?.alwaysActive === true || entry?.mode === "constant" || worldRuleHeader);
+    return { protected: hard || soft, hard, soft, tier: hard ? "hard" : soft ? "soft" : "none", reasons: unique(reasons, 8), priority };
   }
 
-  function loreLexicalScore(entry, queryText) {
-    const tokens = loreTokenize(queryText, 120);
-    if (!tokens.length) return { score: 0, matches: [] };
-    const meta = `${entry?.key || ""} ${entry?.secondkey || ""} ${entry?.comment || ""}`.toLowerCase();
-    const content = String(entry?.content || "").toLowerCase();
-    let points = 0;
+  function loreFieldTokenCounts(value) {
+    const counts = new Map();
+    for (const token of loreTokenize(value, 400)) counts.set(token, (counts.get(token) || 0) + 1);
+    return counts;
+  }
+
+  function loreCorpusStats(entries, queryTokens) {
+    const documentFrequency = new Map(queryTokens.map(token => [token, 0]));
+    const docs = asArray(entries).map(entry => {
+      const fields = {
+        key: loreFieldTokenCounts(entry?.key || ""),
+        secondkey: loreFieldTokenCounts(entry?.secondkey || ""),
+        comment: loreFieldTokenCounts(entry?.comment || ""),
+        content: loreFieldTokenCounts(entry?.content || "")
+      };
+      const seen = new Set();
+      for (const field of Object.values(fields)) for (const token of field.keys()) if (documentFrequency.has(token)) seen.add(token);
+      for (const token of seen) documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
+      return { entry, fields };
+    });
+    const total = Math.max(1, docs.length);
+    const idf = new Map(queryTokens.map(token => {
+      const df = Number(documentFrequency.get(token) || 0);
+      return [token, Math.log(1 + (total - df + 0.5) / (df + 0.5))];
+    }));
+    return { docs, idf, total };
+  }
+
+  function loreBm25fScore(doc, queryTokens, idf) {
+    const weights = { key: 3.4, secondkey: 2.8, comment: 1.8, content: 1.0 };
+    const k1 = 1.2;
+    let raw = 0;
+    let idfTotal = 0;
     const matches = [];
-    for (const token of tokens) {
-      let hit = 0;
-      if (meta.includes(token)) hit += 4.5;
-      if (content.includes(token)) hit += 1.5;
-      if (hit > 0) {
-        points += hit;
-        if (matches.length < 8) matches.push(token);
-      }
+    const rareMatches = [];
+    for (const token of queryTokens) {
+      const tokenIdf = Number(idf.get(token) || 0);
+      idfTotal += tokenIdf;
+      let weightedTf = 0;
+      for (const [fieldName, fieldCounts] of Object.entries(doc.fields)) weightedTf += Number(fieldCounts.get(token) || 0) * weights[fieldName];
+      if (weightedTf <= 0) continue;
+      const saturation = (weightedTf * (k1 + 1)) / (weightedTf + k1);
+      raw += tokenIdf * saturation;
+      if (matches.length < 8) matches.push(token);
+      if (tokenIdf >= 1.15 && rareMatches.length < 6) rareMatches.push(token);
     }
-    const denom = Math.max(10, Math.min(44, tokens.length * 2.8));
-    return { score: Math.min(1, points / denom), matches };
+    const score = idfTotal > 0 ? Math.min(1, raw / Math.max(1.4, idfTotal * 1.45)) : 0;
+    return { score, matches, rareMatches };
+  }
+
+  function loreExactAnchorScore(entry, queryText) {
+    const query = String(queryText || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
+    if (!query) return { score: 0, matches: [] };
+    const anchors = unique([entry?.key, entry?.secondkey, entry?.comment].map(value => String(value || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim()).filter(value => value.length >= 2 && value.length <= 120), 12);
+    const hits = anchors.filter(anchor => query.includes(anchor));
+    let score = 0;
+    if (hits.some(hit => hit === String(entry?.key || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim())) score += 0.7;
+    if (hits.some(hit => hit === String(entry?.secondkey || "").normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim())) score += 0.2;
+    if (hits.length >= 2) score += 0.1;
+    return { score: Math.min(1, score), matches: hits.slice(0, 4) };
   }
 
   function loreDomainScore(entry, domain = "world") {
@@ -5167,13 +8021,15 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     return Math.min(1, score);
   }
 
-  function loreScoreReasons(entry, lexical, domainScore, protection, modeLabel = "") {
+  function loreScoreReasons(entry, bm25f, exactAnchor, domainScore, protection, modeLabel = "") {
     const reasons = [];
-    if (protection?.protected) reasons.push(`보호: ${protection.reasons.join(", ")}`);
-    if (lexical?.matches?.length) reasons.push(`키워드: ${lexical.matches.slice(0, 5).join(", ")}`);
+    if (protection?.hard) reasons.push(`강한 보호 규칙: ${protection.reasons.join(", ")}`);
+    else if (protection?.soft) reasons.push(`보호 후보: ${protection.reasons.join(", ")}`);
+    if (exactAnchor?.matches?.length) reasons.push(`정확 구문: ${exactAnchor.matches.slice(0, 3).join(", ")}`);
+    if (bm25f?.rareMatches?.length) reasons.push(`희귀어: ${bm25f.rareMatches.slice(0, 4).join(", ")}`);
+    else if (bm25f?.matches?.length) reasons.push(`BM25F: ${bm25f.matches.slice(0, 5).join(", ")}`);
     if (domainScore >= 0.5) reasons.push(modeLabel ? `${modeLabel} 도메인 적합` : "도메인 적합");
     if (entry?.source === "character_lore") reasons.push("캐릭터 로어");
-    if (entry?.alwaysActive) reasons.push("항상 활성");
     return unique(reasons, 6);
   }
 
@@ -5213,43 +8069,293 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   function rerankLoreEntries(entries, ctx, purpose = "world", topK = 8, options = {}) {
     const query = String(options?.queryOverride || "").trim() || (purpose === "world" ? worldLoreQuery(ctx) : personaLoreQuery(ctx));
     const modeLabel = purpose === "world" ? "세계관" : generationModeLabel(generationModeFor(ctx));
-    const annotated = asArray(entries).map((entry) => {
+    const normalizedEntries = asArray(entries);
+    const queryTokens = loreTokenize(query, 180);
+    const corpus = loreCorpusStats(normalizedEntries, queryTokens);
+    const annotated = corpus.docs.map(({ entry, fields }) => {
       const protection = loreProtection(entry);
-      const lexical = loreLexicalScore(entry, query);
+      const bm25f = loreBm25fScore({ entry, fields }, queryTokens, corpus.idf);
+      const exactAnchor = loreExactAnchorScore(entry, query);
       const domain = loreDomainScore(entry, purpose === "world" ? "world" : "persona");
       const legacyBase = Math.min(1, Number(entry?.score || 0) / 180);
-      const protectionBoost = protection.protected ? Math.min(1, protection.priority / 180) : 0;
-      const score = Math.min(1, lexical.score * 0.48 + domain * 0.34 + legacyBase * 0.1 + protectionBoost * 0.08);
+      const protectionBoost = protection.hard ? 1 : protection.soft ? Math.min(1, protection.priority / 240) : 0;
+      const score = Math.min(1, bm25f.score * 0.52 + exactAnchor.score * 0.22 + domain * 0.14 + legacyBase * 0.06 + protectionBoost * 0.06);
       return {
         ...entry,
         protection,
         rerankScore: score,
         rerankPurpose: purpose,
-        rerankReasons: loreScoreReasons(entry, lexical, domain, protection, modeLabel),
+        rerankReasons: loreScoreReasons(entry, bm25f, exactAnchor, domain, protection, modeLabel),
       };
     });
-    const protectedItems = annotated.filter((item) => item.protection.protected)
+    const hardProtected = annotated.filter((item) => item.protection.hard)
       .sort((a, b) => b.protection.priority - a.protection.priority || b.rerankScore - a.rerankScore);
+    const softProtected = annotated.filter((item) => item.protection.soft)
+      .sort((a, b) => b.rerankScore - a.rerankScore || b.protection.priority - a.protection.priority);
     const normal = annotated.filter((item) => !item.protection.protected).sort((a, b) => b.rerankScore - a.rerankScore);
-    const minimumScore = purpose === "world" ? 0.055 : 0.04;
-    const selectedNormal = normal.filter((item) => item.rerankScore >= minimumScore).slice(0, Math.max(1, topK));
-    const selectedIds = new Set([...protectedItems, ...selectedNormal].map((item) => item.loreId));
-    const selected = [...protectedItems, ...selectedNormal].map((item, index) => ({ ...item, index: index + 1, rerankDecision: item.protection.protected ? "protected" : "selected" }));
+    const minimumScore = purpose === "world" ? 0.08 : 0.06;
+    const softProtectedBudget = Math.max(1, Math.min(8, Math.ceil(Math.max(1, topK) * 0.35)));
+    const selectedSoft = softProtected.slice(0, softProtectedBudget);
+    const normalBudget = Math.max(0, Math.max(1, topK) - selectedSoft.length);
+    const selectedNormal = normal.filter((item) => item.rerankScore >= minimumScore).slice(0, normalBudget);
+    const selectedIds = new Set([...hardProtected, ...selectedSoft, ...selectedNormal].map((item) => item.loreId));
+    const selected = [
+      ...hardProtected.map(item => ({ ...item, rerankDecision: "protected", protectionTier: "hard" })),
+      ...selectedSoft.map(item => ({ ...item, rerankDecision: "protected", protectionTier: "soft" })),
+      ...selectedNormal.map(item => ({ ...item, rerankDecision: "selected", protectionTier: "none" }))
+    ].map((item, index) => ({ ...item, index: index + 1 }));
     const rejected = annotated.filter((item) => !selectedIds.has(item.loreId))
       .sort((a, b) => b.rerankScore - a.rerankScore)
-      .map((item) => ({ ...item, rerankDecision: "rejected" }));
+      .map((item) => ({ ...item, rerankDecision: "rejected", protectionTier: item.protection?.tier || "none" }));
     return {
       version: LORE_RERANKER_VERSION,
       purpose,
       topK,
       minimumScore,
       total: annotated.length,
-      protectedCount: protectedItems.length,
+      protectedCount: hardProtected.length + selectedSoft.length,
+      hardProtectedCount: hardProtected.length,
+      softProtectedCount: selectedSoft.length,
+      softProtectedBudget,
       selectedCount: selected.length,
       selected,
       rejected,
       all: [...selected, ...rejected],
     };
+  }
+
+  function liaWorldLoreComputeInput(entries, ctx, topK = WORLD_LORE_TOP_K) {
+    return {
+      version: LORE_RERANKER_VERSION,
+      purpose: "world",
+      topK: Math.max(1, Math.min(100, Number(topK || WORLD_LORE_TOP_K) || WORLD_LORE_TOP_K)),
+      query: worldLoreQuery(ctx),
+      entries: asArray(entries).map((entry, position) => ({
+        position,
+        loreId: String(entry?.loreId || ""),
+        key: String(entry?.key || ""),
+        secondkey: String(entry?.secondkey || ""),
+        comment: String(entry?.comment || ""),
+        content: String(entry?.content || ""),
+        mode: String(entry?.mode || ""),
+        alwaysActive: entry?.alwaysActive === true,
+        insertorder: Number(entry?.insertorder || 0) || 0,
+        source: String(entry?.source || ""),
+        score: Number(entry?.score || 0) || 0,
+      })),
+    };
+  }
+
+  function projectLiaWorldLoreKernelRow(row) {
+    return {
+      position: Number(row?.position),
+      loreId: String(row?.loreId || ""),
+      protection: {
+        protected: row?.protection?.protected === true,
+        hard: row?.protection?.hard === true,
+        soft: row?.protection?.soft === true,
+        tier: String(row?.protection?.tier || "none"),
+        reasons: asArray(row?.protection?.reasons).map(String),
+        priority: Number(row?.protection?.priority || 0),
+      },
+      rerankScore: Number(row?.rerankScore || 0),
+      rerankPurpose: "world",
+      rerankReasons: asArray(row?.rerankReasons).map(String),
+      ...(Number.isInteger(Number(row?.index)) ? { index: Number(row.index) } : {}),
+      rerankDecision: String(row?.rerankDecision || ""),
+      protectionTier: String(row?.protectionTier || row?.protection?.tier || "none"),
+    };
+  }
+
+  function runLiaWorldLoreComputeLocal(input = {}) {
+    const full = rerankLoreEntries(asArray(input?.entries), {}, "world", Number(input?.topK || WORLD_LORE_TOP_K), {
+      queryOverride: String(input?.query || ""),
+    });
+    const selected = full.selected.map(projectLiaWorldLoreKernelRow);
+    const rejected = full.rejected.map(projectLiaWorldLoreKernelRow);
+    return {
+      version: full.version,
+      purpose: "world",
+      topK: full.topK,
+      minimumScore: full.minimumScore,
+      total: full.total,
+      protectedCount: full.protectedCount,
+      hardProtectedCount: full.hardProtectedCount,
+      softProtectedCount: full.softProtectedCount,
+      softProtectedBudget: full.softProtectedBudget,
+      selectedCount: full.selectedCount,
+      selected,
+      rejected,
+      all: [...selected, ...rejected],
+    };
+  }
+
+  function validateLiaWorldLoreComputeResult(result, context = {}) {
+    const input = context?.input || {};
+    const entries = asArray(input.entries);
+    if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+    if (result.version !== LORE_RERANKER_VERSION || result.purpose !== "world") return false;
+    if (result.topK !== input.topK || result.total !== entries.length) return false;
+    if (!Number.isFinite(result.minimumScore) || result.minimumScore !== 0.08) return false;
+    if (!Array.isArray(result.selected) || !Array.isArray(result.rejected) || !Array.isArray(result.all)) return false;
+    if (result.selectedCount !== result.selected.length || result.all.length !== result.selected.length + result.rejected.length) return false;
+    const expectedAll = [...result.selected, ...result.rejected];
+    const seenPositions = new Set();
+    const validateRow = (row, expectedDecision, expectedIndex = null) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) return false;
+      const position = Number(row.position);
+      if (!Number.isInteger(position) || position < 0 || position >= entries.length || seenPositions.has(position)) return false;
+      if (String(row.loreId || "") !== String(entries[position]?.loreId || "")) return false;
+      if (!row.protection || typeof row.protection !== "object" || Array.isArray(row.protection)) return false;
+      if (typeof row.protection.protected !== "boolean" || typeof row.protection.hard !== "boolean" || typeof row.protection.soft !== "boolean" || !["hard", "soft", "none"].includes(String(row.protection.tier || "")) || !Array.isArray(row.protection.reasons) || !Number.isFinite(row.protection.priority)) return false;
+      if (row.protection.hard && row.protection.soft) return false;
+      if (row.protection.protected !== (row.protection.hard || row.protection.soft)) return false;
+      if (!row.protection.reasons.every((value) => typeof value === "string") || row.protection.reasons.length > 8) return false;
+      if (!["hard", "soft", "none"].includes(String(row.protectionTier || ""))) return false;
+      if (!Number.isFinite(row.rerankScore) || row.rerankScore < 0 || row.rerankScore > 1) return false;
+      if (row.rerankPurpose !== "world" || !Array.isArray(row.rerankReasons) || row.rerankReasons.length > 6 || !row.rerankReasons.every((value) => typeof value === "string")) return false;
+      if (String(row.rerankDecision || "") !== expectedDecision && !(expectedDecision === "selected" && row.rerankDecision === "protected")) return false;
+      if (expectedIndex !== null && Number(row.index) !== expectedIndex) return false;
+      seenPositions.add(position);
+      return true;
+    };
+    for (let index = 0; index < result.selected.length; index += 1) {
+      if (!validateRow(result.selected[index], "selected", index + 1)) return false;
+    }
+    for (const row of result.rejected) if (!validateRow(row, "rejected")) return false;
+    if (result.protectedCount !== result.selected.filter((row) => row.protection.protected).length) return false;
+    if (!Number.isInteger(result.hardProtectedCount) || result.hardProtectedCount !== result.selected.filter((row) => row.protection.hard).length) return false;
+    if (!Number.isInteger(result.softProtectedCount) || result.softProtectedCount !== result.selected.filter((row) => row.protection.soft).length) return false;
+    if (!Number.isInteger(result.softProtectedBudget) || result.softProtectedBudget < 1 || result.softProtectedBudget > 8 || result.softProtectedCount > result.softProtectedBudget) return false;
+    return result.all.every((row, index) => JSON.stringify(row) === JSON.stringify(expectedAll[index]));
+  }
+
+  function liaWorldLoreComputeBinding(ctx, input) {
+    const char = ctx?.char || {};
+    const chat = ctx?.chat || {};
+    const persona = ctx?.personaInfo?.persona || {};
+    return {
+      schema: "memory-suite.lia.world-lore-binding.v1",
+      pluginVersion: PLUGIN_VERSION,
+      algorithmFingerprint: LIA_WORLD_LORE_COMPUTE_FINGERPRINT,
+      scopeKey: livePersonaScopeKey(ctx),
+      characterId: String(char?.chaId || char?.id || ctx?.charIndex || ""),
+      chatId: String(chat?.id || chat?.chatId || ctx?.chatIndex || ""),
+      personaId: String(persona?.id || chat?.bindedPersona || ""),
+      loreInventoryDigest: hashText(JSON.stringify(input?.entries || [])),
+      queryDigest: hashText(String(input?.query || "")),
+      topK: Number(input?.topK || 0),
+    };
+  }
+
+  async function currentLiaWorldLoreComputeBinding(sourceCtx = {}) {
+    const current = await getLiveRuntimeContext();
+    const currentDb = await boundedLiaHostContextCall(
+      "getDatabase:lia_world_lore_binding",
+      () => api.getDatabase?.(["personas", "selectedPersona", "modules", "enabledModules", "moduleIntergration", "moduleIntegration"]),
+      current.db || {},
+    );
+    current.db = currentDb || current.db || {};
+    const maxEntries = Math.max(3, Math.min(40, Number(sourceCtx?.maxEntries || DEFAULT_MAX_LORE_ENTRIES) || DEFAULT_MAX_LORE_ENTRIES));
+    const maxChars = Math.max(240, Math.min(3000, Number(sourceCtx?.maxChars || DEFAULT_MAX_LORE_CHARS) || DEFAULT_MAX_LORE_CHARS));
+    const contextOptions = sourceCtx?.contextOptions || DEFAULT_CONTEXT_OPTIONS;
+    const personaInfo = resolvePersona(current.db || {}, current.char, current.chat, contextOptions);
+    const characterDescription = collectCharacterDescription(current.char, maxChars);
+    const allActiveModules = collectActiveModules(current.db || {}, current.char, current.chat);
+    const selectedModuleSet = new Set(asArray(contextOptions.selectedModuleIds));
+    const activeModules = contextOptions.moduleLore
+      ? allActiveModules.filter((mod) => selectedModuleSet.has(moduleChoiceValue(mod)))
+      : [];
+    const moduleDescriptions = contextOptions.moduleLore ? collectModuleDescriptions(activeModules, maxChars) : [];
+    const allLoreSignals = collectLoreSignals(current.char, current.chat, activeModules, maxEntries, maxChars);
+    const loreCandidates = filterLoreSignalsByOptions(allLoreSignals, contextOptions);
+    const currentCtx = { ...current, personaInfo, contextOptions, characterDescription, allActiveModules, activeModules, moduleDescriptions, loreCandidates, allLoreSignals, maxEntries, maxChars };
+    const input = liaWorldLoreComputeInput(loreCandidates, currentCtx, WORLD_LORE_TOP_K);
+    return liaWorldLoreComputeBinding(currentCtx, input);
+  }
+
+  function materializeLiaWorldLoreComputeResult(kernelResult, entries) {
+    const sourceEntries = asArray(entries);
+    const materialize = (row) => {
+      const position = Number(row?.position);
+      const source = sourceEntries[position];
+      if (!source || String(source.loreId || "") !== String(row?.loreId || "")) throw new Error("lia_world_lore_compute_materialization_stale");
+      return {
+        ...source,
+        protection: { ...row.protection, reasons: asArray(row?.protection?.reasons).slice() },
+        rerankScore: row.rerankScore,
+        rerankPurpose: "world",
+        rerankReasons: asArray(row.rerankReasons).slice(),
+        ...(Number.isInteger(Number(row?.index)) ? { index: Number(row.index) } : {}),
+        rerankDecision: row.rerankDecision,
+      };
+    };
+    const selected = asArray(kernelResult?.selected).map(materialize);
+    const rejected = asArray(kernelResult?.rejected).map(materialize);
+    return {
+      version: kernelResult.version,
+      purpose: "world",
+      topK: kernelResult.topK,
+      minimumScore: kernelResult.minimumScore,
+      total: kernelResult.total,
+      protectedCount: kernelResult.protectedCount,
+      selectedCount: selected.length,
+      selected,
+      rejected,
+      all: [...selected, ...rejected],
+    };
+  }
+
+  const MemorySuiteLiaComputeBridge = createMemorySuiteComputeBridge({
+    namespace: "lia",
+    pluginId: "lia_persona_linker",
+    pluginVersion: PLUGIN_VERSION,
+    defaultMode: "local",
+    defaultDeadlineMs: 1200,
+    localReserveMs: 350,
+    derivedCacheTtlMs: 5 * 60 * 1000,
+    operations: {
+      [LIA_WORLD_LORE_COMPUTE_OPERATION]: {
+        algorithmFingerprint: LIA_WORLD_LORE_COMPUTE_FINGERPRINT,
+        local: runLiaWorldLoreComputeLocal,
+        validateResult: validateLiaWorldLoreComputeResult,
+      },
+    },
+  });
+
+  async function rerankWorldLoreEntriesWithCompute(entries, ctx, topK = WORLD_LORE_TOP_K) {
+    const input = liaWorldLoreComputeInput(entries, ctx, topK);
+    const binding = liaWorldLoreComputeBinding(ctx, input);
+    const executionPolicy = await MemorySuiteStorageBridge.getScopeExecutionPolicy({
+      scopeId: binding.scopeKey,
+      scopeKey: binding.scopeKey,
+      characterId: binding.characterId,
+      chatId: binding.chatId,
+      personaId: binding.personaId
+    }, { force: false });
+    try {
+      const envelope = await MemorySuiteLiaComputeBridge.execute({
+        operation: LIA_WORLD_LORE_COMPUTE_OPERATION,
+        input,
+        binding,
+        mode: executionPolicy.computeMode,
+        lane: "interactive",
+        deadlineMs: 1200,
+        localReserveMs: 350,
+        validateBinding: async (submittedBinding) => {
+          try {
+            const current = await currentLiaWorldLoreComputeBinding(ctx);
+            return JSON.stringify(current) === JSON.stringify(submittedBinding);
+          } catch (_) {
+            return false;
+          }
+        },
+      });
+      return materializeLiaWorldLoreComputeResult(envelope.result, entries);
+    } catch (error) {
+      appendDebugLog("compute", "world_lore_local_fallback", { code: String(error?.code || "LIA_WORLD_LORE_COMPUTE_FAILED") }, "warn");
+      return rerankLoreEntries(entries, ctx, "world", topK);
+    }
   }
 
   function refreshPersonaLoreRerank(ctx) {
@@ -6166,9 +9272,26 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       coreOverlayAfter: asArray(item?.coreOverlayAfter).map(normalizeLiveCoreItem).filter(Boolean).slice(0, LIVE_SYNC_CORE_MAX),
       coreCandidateHistoryAfter: item?.coreCandidateHistoryAfter && typeof item.coreCandidateHistoryAfter === "object" ? item.coreCandidateHistoryAfter : {},
       ignoredTransient: unique(asArray(item?.ignoredTransient).map((x) => compact(x)), 20),
+      sourceRevision: item?.sourceRevision && typeof item.sourceRevision === "object" ? {
+        schema: String(item.sourceRevision.schema || ""),
+        sourceFingerprint: String(item.sourceRevision.sourceFingerprint || ""),
+        outputTurnKey: String(item.sourceRevision.outputTurnKey || ""),
+        outputRevision: Math.max(0, Number(item.sourceRevision.outputRevision || 0) || 0),
+        captureBackend: String(item.sourceRevision.captureBackend || ""),
+      } : null,
     })).filter((item) => item.startPair > 0 && item.endPair >= item.startPair).slice(-LIVE_SYNC_LEDGER_MAX);
     return {
       scopeKey,
+      hostLineage: raw.hostLineage ? MemorySuiteHostLineage.normalize(raw.hostLineage) : null,
+      nativeBranchState: raw.nativeBranchState && typeof raw.nativeBranchState === 'object' ? {
+        schema: 'lia.native_branch_state.v1', verified: raw.nativeBranchState.verified === true,
+        reason: String(raw.nativeBranchState.reason || ''),
+        sourceScopeKey: String(raw.nativeBranchState.sourceScopeKey || ''),
+        sharedPairs: Math.max(0, Number(raw.nativeBranchState.sharedPairs || 0)),
+        stateThroughPair: Math.max(0, Number(raw.nativeBranchState.stateThroughPair || 0)),
+        pendingPrefixPairs: Math.max(0, Number(raw.nativeBranchState.pendingPrefixPairs || 0)),
+        latestParentHeadCopied: false
+      } : null,
       enabled: raw.enabled === true,
       policy: String(raw.policy || "conservative") === "auto" ? "auto" : "conservative",
       externalChangePolicy: String(raw.externalChangePolicy || raw.external_change_policy || "safe") === "follow" ? "follow" : "safe",
@@ -6192,6 +9315,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           legacyInferred: true,
         } : null;
       })(),
+      pendingBindingChange: raw.pendingBindingChange && typeof raw.pendingBindingChange === "object" ? JSON.parse(JSON.stringify(raw.pendingBindingChange)) : null,
       bindingStatus: String(raw.bindingStatus || raw.binding_status || "unknown"),
       lastObservedBindingId: String(raw.lastObservedBindingId || raw.last_observed_binding_id || "").trim(),
       lastBindingCheckAt: String(raw.lastBindingCheckAt || raw.last_binding_check_at || ""),
@@ -6278,13 +9402,34 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     return result;
   }
 
+  async function removePluginStorageItemChecked(storage, key, operation = 'plugin_storage_remove', options = {}) {
+    if (typeof storage?.removeItem !== 'function') throw new Error('RisuAI pluginStorage removeItem is unavailable.');
+    const before = typeof storage?.getItem === 'function' ? await storage.getItem(key) : undefined;
+    if (options.missingOk === true && (before === null || before === undefined || before === '')) return true;
+    const result = await storage.removeItem(key);
+    if (storageWriteExplicitlyFailed(result)) throw new Error(`${operation} failed for pluginStorage key: ${String(key || '(empty)')}`);
+    const readback = typeof storage?.getItem === 'function' ? await storage.getItem(key) : undefined;
+    if (readback !== null && readback !== undefined && readback !== '') {
+      throw new Error(`${operation} readback mismatch for pluginStorage key: ${String(key || '(empty)')}`);
+    }
+    return true;
+  }
+
   async function writeLivePersonaIndex(storage, index) {
     if (!storage?.setItem) throw new Error('RisuAI pluginStorage가 아직 준비되지 않았습니다.');
+    const entries = index?.entries && typeof index.entries === 'object' ? index.entries : {};
+    if (!Object.keys(entries).length) {
+      const existing = await storage.getItem?.(LIVE_PERSONA_INDEX_STORAGE_KEY);
+      if (existing !== null && existing !== undefined && existing !== '') {
+        await removePluginStorageItemChecked(storage, LIVE_PERSONA_INDEX_STORAGE_KEY, 'live_persona_empty_index_remove');
+      }
+      return { schema: LIVE_PERSONA_INDEX_SCHEMA, version: 2, updatedAt: new Date().toISOString(), entries: {} };
+    }
     const payload = {
       schema: LIVE_PERSONA_INDEX_SCHEMA,
       version: 2,
       updatedAt: new Date().toISOString(),
-      entries: index?.entries && typeof index.entries === 'object' ? index.entries : {}
+      entries
     };
     await setPluginStorageItemChecked(storage, LIVE_PERSONA_INDEX_STORAGE_KEY, JSON.stringify(payload), 'live_persona_index_write');
     return payload;
@@ -6294,31 +9439,75 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const normalized = normalizeLivePersonaStore(store);
     const index = existingIndex || await readLivePersonaIndex(storage);
     const nextEntries = {};
-    for (const [scopeKey, rawBinding] of Object.entries(normalized.bindings || {})) {
-      const binding = normalizeLivePersonaBinding({ ...(rawBinding || {}), scopeKey: rawBinding?.scopeKey || scopeKey });
-      if (!binding) continue;
-      const storageKey = livePersonaScopeStorageKey(binding.scopeKey);
-      const serialized = JSON.stringify(binding);
-      const digest = hashText(serialized);
-      const previous = index.entries?.[binding.scopeKey];
-      if (!previous || previous.digest !== digest || previous.storageKey !== storageKey) {
-        await setPluginStorageItemChecked(storage, storageKey, serialized, 'live_persona_shard_write');
+    const touched = [];
+    const remember = async storageKey => {
+      if (touched.some(row => row.storageKey === storageKey)) return;
+      touched.push({ storageKey, before: await storage.getItem?.(storageKey) });
+    };
+    const rollback = async cause => {
+      const failures = [];
+      for (const row of touched.slice().reverse()) {
+        try {
+          if (row.before === null || row.before === undefined || row.before === '') {
+            await removePluginStorageItemChecked(storage, row.storageKey, 'live_persona_shard_rollback_remove', { missingOk: true });
+          } else {
+            await setPluginStorageItemChecked(storage, row.storageKey, row.before, 'live_persona_shard_rollback_restore');
+            const readback = await storage.getItem?.(row.storageKey);
+            if (hashText(String(readback ?? '')) !== hashText(String(row.before ?? ''))) throw new Error('rollback_readback_mismatch');
+          }
+        } catch (error) { failures.push(`${row.storageKey}:${error?.message || error}`); }
       }
-      nextEntries[binding.scopeKey] = {
-        storageKey,
-        digest,
-        livePersonaId: String(binding.livePersonaId || ''),
-        updatedAt: String(binding.updatedAt || new Date().toISOString())
-      };
+      if (failures.length) {
+        const error = new Error(`LIA_LIVE_PERSONA_BINDING_ROLLBACK_INCOMPLETE:${failures.length}`);
+        error.code = 'LIA_LIVE_PERSONA_BINDING_ROLLBACK_INCOMPLETE';
+        error.cause = cause;
+        error.failures = failures;
+        throw error;
+      }
+      throw cause;
+    };
+    try {
+      for (const [scopeKey, rawBinding] of Object.entries(normalized.bindings || {})) {
+        const binding = normalizeLivePersonaBinding({ ...(rawBinding || {}), scopeKey: rawBinding?.scopeKey || scopeKey });
+        if (!binding) continue;
+        const storageKey = livePersonaScopeStorageKey(binding.scopeKey);
+        const serialized = JSON.stringify(binding);
+        const digest = hashText(serialized);
+        const previous = index.entries?.[binding.scopeKey];
+        if (!previous || previous.digest !== digest || previous.storageKey !== storageKey) {
+          await remember(storageKey);
+          await setPluginStorageItemChecked(storage, storageKey, serialized, 'live_persona_shard_write');
+        }
+        nextEntries[binding.scopeKey] = {
+          storageKey,
+          digest,
+          livePersonaId: String(binding.livePersonaId || ''),
+          updatedAt: String(binding.updatedAt || new Date().toISOString())
+        };
+      }
+      for (const [scopeKey, previous] of Object.entries(index.entries || {})) {
+        if (nextEntries[scopeKey]) continue;
+        const storageKey = previous?.storageKey || livePersonaScopeStorageKey(scopeKey);
+        await remember(storageKey);
+        await removePluginStorageItemChecked(storage, storageKey, 'live_persona_removed_shard_delete', { missingOk: true });
+      }
+      const persistedIndex = await writeLivePersonaIndex(storage, { entries: nextEntries });
+      cachedLivePersonaStore = normalized;
+      cachedLivePersonaStoreComplete = true;
+      return { store: normalizeLivePersonaStore(normalized), index: persistedIndex };
+    } catch (error) {
+      const durableIndex = await readLivePersonaIndex(storage).catch(() => null);
+      const expectedIndexDigest = hashText(JSON.stringify(Object.entries(nextEntries).sort(([a], [b]) => a.localeCompare(b))));
+      const durableIndexDigest = durableIndex
+        ? hashText(JSON.stringify(Object.entries(durableIndex.entries || {}).sort(([a], [b]) => a.localeCompare(b))))
+        : '';
+      if (durableIndex && durableIndexDigest === expectedIndexDigest) {
+        cachedLivePersonaStore = normalized;
+        cachedLivePersonaStoreComplete = true;
+        return { store: normalizeLivePersonaStore(normalized), index: durableIndex, recoveredFromIndeterminateWrite: true };
+      }
+      return await rollback(error);
     }
-    for (const [scopeKey, previous] of Object.entries(index.entries || {})) {
-      if (nextEntries[scopeKey]) continue;
-      try { await storage.removeItem?.(previous?.storageKey || livePersonaScopeStorageKey(scopeKey)); } catch (_) {}
-    }
-    const persistedIndex = await writeLivePersonaIndex(storage, { entries: nextEntries });
-    cachedLivePersonaStore = normalized;
-    cachedLivePersonaStoreComplete = true;
-    return { store: normalizeLivePersonaStore(normalized), index: persistedIndex };
   }
 
   async function migrateLegacyLivePersonaStore(storage) {
@@ -6381,6 +9570,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
   async function readLivePersonaBindingByScopeKey(scopeKey, force = false) {
     const key = String(scopeKey || '').trim();
     if (!key) return null;
+    if (!force && cachedLivePersonaStoreComplete && cachedLivePersonaStore?.bindings) {
+      return normalizeLivePersonaBinding(cachedLivePersonaStore.bindings[key] || null);
+    }
     if (!force && cachedLivePersonaStore?.bindings?.[key]) return normalizeLivePersonaBinding(cachedLivePersonaStore.bindings[key]);
     const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
     if (!storage?.getItem) return null;
@@ -6520,6 +9712,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const currentScopeKey = String(options.currentScopeKey || '').trim();
     const sourceChatId = String(options.sourceChatId || '').trim();
     const livePersonaId = String(options.livePersonaId || '').trim();
+    if (!sourceChatId && !livePersonaId) return null;
     const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
     if (!storage?.getItem) return null;
     const index = await readLivePersonaIndexWithMigration(storage);
@@ -6582,11 +9775,30 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
         }
         personas[index] = nextPersona;
       } else personas.push({ ...persona, id });
-      await api.setDatabase?.({ personas });
+      if (typeof api.setDatabase !== "function") throw new Error("RisuAI Persona 저장 API가 없습니다.");
+      const writeResult = await api.setDatabase({ personas });
+      if (writeResult === false || writeResult?.ok === false || writeResult?.success === false) {
+        const error = new Error("RisuAI가 Persona 저장을 거부했습니다. 처리 완료로 기록하지 않습니다.");
+        error.code = "LIA_PERSONA_WRITE_REJECTED";
+        throw error;
+      }
       const verify = await api.getDatabase?.(["personas", "selectedPersona"]);
       const verifyPersonas = asArray(verify?.personas);
       const verifyIndex = verifyPersonas.findIndex((item) => String(item?.id || "").trim() === id);
       if (verifyIndex < 0) throw new Error("Persona 저장 직후 RisuAI readback에서 대상 Persona가 사라졌습니다.");
+      const expected = personas.find((item) => String(item?.id || "").trim() === id);
+      const actual = verifyPersonas[verifyIndex];
+      // An existing ID proves existence, not adoption of the new Persona.
+      // Void host returns are valid only when the intended content reads back.
+      const mismatch = ["name", "personaPrompt"].filter((field) =>
+        Object.prototype.hasOwnProperty.call(expected, field)
+        && String(actual?.[field] ?? "") !== String(expected[field] ?? ""));
+      if (mismatch.length) {
+        const error = new Error(`Persona 저장 readback 불일치: ${mismatch.join(", ")}. 이전 처리 범위를 유지합니다.`);
+        error.code = "LIA_PERSONA_READBACK_MISMATCH";
+        error.fields = mismatch;
+        throw error;
+      }
       appendDebugLog("persona_db", "upsert_success", { personaId: id, personaName: verifyPersonas[verifyIndex]?.name || persona?.name || "", created: index < 0, verifyIndex, afterCount: verifyPersonas.length, selectedPersona: Number(verify?.selectedPersona) }, "info");
       return { created: index < 0, index: verifyIndex, persona: verifyPersonas[verifyIndex] };
     });
@@ -6612,10 +9824,29 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       // Persona content updates preserve array order, so selectedPersona must not
       // be rewritten. This prevents a background Live revision from undoing a
       // Persona the user just selected in RisuAI.
-      await api.setDatabase?.({ personas });
+      if (typeof api.setDatabase !== "function") throw new Error("RisuAI Persona 저장 API가 없습니다.");
+      const writeResult = await api.setDatabase({ personas });
+      if (writeResult === false || writeResult?.ok === false || writeResult?.success === false) {
+        const error = new Error("RisuAI가 Persona 저장을 거부했습니다. 처리 완료로 기록하지 않습니다.");
+        error.code = "LIA_PERSONA_WRITE_REJECTED";
+        throw error;
+      }
       const verify = await api.getDatabase?.(["personas", "selectedPersona"]);
       const verified = asArray(verify?.personas).find((item) => String(item?.id || "").trim() === wanted);
       if (!verified) throw new Error("Live Persona 갱신 직후 RisuAI readback에서 대상 Persona가 사라졌습니다.");
+      const expected = nextPersona;
+      const actual = verified;
+      // An existing ID proves existence, not adoption of the new Persona.
+      // Void host returns are valid only when the intended content reads back.
+      const mismatch = ["name", "personaPrompt"].filter((field) =>
+        Object.prototype.hasOwnProperty.call(expected, field)
+        && String(actual?.[field] ?? "") !== String(expected[field] ?? ""));
+      if (mismatch.length) {
+        const error = new Error(`Persona 저장 readback 불일치: ${mismatch.join(", ")}. 이전 처리 범위를 유지합니다.`);
+        error.code = "LIA_PERSONA_READBACK_MISMATCH";
+        error.fields = mismatch;
+        throw error;
+      }
       appendDebugLog("persona_db", "mutate_success", { personaId: wanted, personaName: verified?.name || "", selectedPersona: Number(verify?.selectedPersona), personaCount: asArray(verify?.personas).length }, "info");
       return verified;
     });
@@ -6721,7 +9952,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     };
   }
 
-  async function writeLivePersonaBinding(binding) {
+  async function writeLivePersonaBinding(binding, options = {}) {
     const normalized = normalizeLivePersonaBinding(binding);
     if (!normalized) throw new Error('Live Persona binding이 올바르지 않습니다.');
     const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
@@ -6730,13 +9961,18 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const storageKey = livePersonaScopeStorageKey(normalized.scopeKey);
     const serialized = JSON.stringify(normalized);
     const digest = hashText(serialized);
-    await setPluginStorageItemChecked(storage, storageKey, serialized, 'live_persona_binding_shard_write');
-    index.entries[normalized.scopeKey] = { storageKey, digest, livePersonaId: String(normalized.livePersonaId || ''), updatedAt: String(normalized.updatedAt || new Date().toISOString()) };
-    await writeLivePersonaIndex(storage, index);
+    const store = await readLivePersonaStore(true);
+    if (!cachedLivePersonaStoreComplete) throw new Error('Live Persona owner store is incomplete; binding write is blocked.');
+    const pending = store.bindings[normalized.scopeKey]?.pendingBindingChange;
+    if (pending && normalized.pendingBindingChange?.id !== pending.id && options.completeChangeId !== pending.id) {
+      throw new Error('LIA_BINDING_CHANGE_PENDING');
+    }
+    store.bindings[normalized.scopeKey] = normalized;
+    await writeSplitLivePersonaStoreRaw(storage, store, index);
     const readback = await verifyDurableLivePersonaBindingReadback(storage, normalized, digest);
-    const store = normalizeLivePersonaStore(cachedLivePersonaStore || {});
-    store.bindings[normalized.scopeKey] = readback.binding;
-    cachedLivePersonaStore = store;
+    const cached = normalizeLivePersonaStore(cachedLivePersonaStore || {});
+    cached.bindings[normalized.scopeKey] = readback.binding;
+    cachedLivePersonaStore = cached;
     return readback;
   }
 
@@ -6753,13 +9989,20 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     if (!bindings.length) {
       return { ok: true, reason: "no_bindings", scannedBindings: 0, renamedPersonas: 0, updatedBindings: 0, skippedBindings: 0, failedBindings: 0 };
     }
+    const migrationCandidates = bindings.filter((binding) => (
+      Number(binding.displayNameVersion || 0) < LIVE_PERSONA_DISPLAY_NAME_VERSION
+      || String(binding.livePersonaName || "").trim() !== storedLivePersonaSourceName(binding)
+    ));
+    if (!migrationCandidates.length) {
+      return { ok: true, reason: "already_current", scannedBindings: bindings.length, renamedPersonas: 0, updatedBindings: 0, skippedBindings: 0, failedBindings: 0 };
+    }
 
     const db = await api.getDatabase?.(["personas", "selectedPersona"]);
     const personas = asArray(db?.personas);
     const groups = new Map();
     let skippedBindings = 0;
     let failedBindings = 0;
-    for (const binding of bindings) {
+    for (const binding of migrationCandidates) {
       const livePersonaId = String(binding.livePersonaId || "").trim();
       const targetName = storedLivePersonaSourceName(binding);
       if (!livePersonaId || !targetName) {
@@ -6865,13 +10108,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
     if (!storage?.setItem) return;
     const index = await readLivePersonaIndexWithMigration(storage);
-    const meta = index.entries[key];
-    try { await storage.removeItem?.(meta?.storageKey || livePersonaScopeStorageKey(key)); } catch (_) {}
-    delete index.entries[key];
-    await writeLivePersonaIndex(storage, index);
-    const store = normalizeLivePersonaStore(cachedLivePersonaStore || {});
+    const store = await readLivePersonaStore(true);
     delete store.bindings[key];
-    cachedLivePersonaStore = store;
+    await writeSplitLivePersonaStoreRaw(storage, store, index);
   }
 
   function isAssistantTurnMessage(item) {
@@ -6911,12 +10150,28 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     };
   }
 
+  function buildCompletedTurnPair(pendingUser, assistant, pairIndex) {
+    const legacyFingerprint = hashText(`${pendingUser.index}|${pendingUser.text}\n---A---\n${assistant.index}|${assistant.text}`);
+    const stableFingerprint = livePersonaPairFingerprintV2(pendingUser, assistant);
+    return {
+      pairIndex,
+      user: { index: pendingUser.index, text: pendingUser.text, messageId: stableFingerprint.userIdentity.id, messageIdentitySource: stableFingerprint.userIdentity.source },
+      assistant: { index: assistant.index, text: assistant.text, messageId: stableFingerprint.assistantIdentity.id, messageIdentitySource: stableFingerprint.assistantIdentity.source },
+      fingerprint: stableFingerprint.fingerprint,
+      fingerprintSchema: stableFingerprint.schema,
+      legacyFingerprint,
+      userDigest: stableFingerprint.userDigest,
+      assistantDigest: stableFingerprint.assistantDigest,
+    };
+  }
+
   function collectCompletedTurnPairs(chat) {
     const messages = asArray(chat?.message || chat?.messages || chat?.data);
     const pairs = [];
     let pendingUser = null;
     for (let index = 0; index < messages.length; index += 1) {
       const item = messages[index];
+      if (item?.disabled === true || item?.isComment === true) continue;
       const text = messageText(item);
       if (!text) continue;
       if (isUserAuthoredMessage(item)) {
@@ -6926,22 +10181,240 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       if (pendingUser && isAssistantTurnMessage(item)) {
         const assistant = { index, text, raw: item };
         const pairIndex = pairs.length + 1;
-        const legacyFingerprint = hashText(`${pendingUser.index}|${pendingUser.text}\n---A---\n${assistant.index}|${assistant.text}`);
-        const stableFingerprint = livePersonaPairFingerprintV2(pendingUser, assistant);
-        pairs.push({
-          pairIndex,
-          user: { index: pendingUser.index, text: pendingUser.text, messageId: stableFingerprint.userIdentity.id, messageIdentitySource: stableFingerprint.userIdentity.source },
-          assistant: { index: assistant.index, text: assistant.text, messageId: stableFingerprint.assistantIdentity.id, messageIdentitySource: stableFingerprint.assistantIdentity.source },
-          fingerprint: stableFingerprint.fingerprint,
-          fingerprintSchema: stableFingerprint.schema,
-          legacyFingerprint,
-          userDigest: stableFingerprint.userDigest,
-          assistantDigest: stableFingerprint.assistantDigest,
-        });
+        pairs.push(buildCompletedTurnPair(pendingUser, assistant, pairIndex));
         pendingUser = null;
       }
     }
     return pairs;
+  }
+
+  function liveSyncCaptureBackendSnapshot() {
+    return {
+      backend: liveSyncCaptureBackend,
+      registered: liveSyncCaptureBackend !== LIVE_SYNC_CAPTURE_BACKENDS.NONE,
+      observedRuns: Math.max(0, Number(liveSyncCaptureObservedRuns || 0) || 0),
+      lastEventAt: Math.max(0, Number(liveSyncCaptureLastEventAt || 0) || 0),
+      fallbackReason: String(liveSyncCaptureFallbackReason || ""),
+      healthChecks: Math.max(0, Number(liveSyncCaptureHealthChecks || 0) || 0),
+      silentFailovers: Math.max(0, Number(liveSyncCaptureSilentFailovers || 0) || 0),
+      healthPending: liveSyncCaptureHealthPending ? sanitizeLogValue(liveSyncCaptureHealthPending) : null,
+      trackedTurnRevisions: liveSyncOutputTurnRevisions.size,
+      scheduledScopes: liveSyncScheduledChecks.size,
+      inFlightScopes: Array.from(liveSyncInFlightScopes).slice(-16),
+      requeueScopes: Array.from(liveSyncRequeueByScope.keys()).slice(-16),
+      lastOutputCapture: liveSyncLastOutputCapture ? { ...liveSyncLastOutputCapture } : null,
+    };
+  }
+
+  function normalizeLiveSyncTarget(raw = {}) {
+    const source = raw && typeof raw === "object" ? raw : {};
+    const characterIndex = Number(source.characterIndex ?? source.charIndex);
+    const chatIndex = Number(source.chatIndex);
+    return {
+      characterIndex: Number.isInteger(characterIndex) && characterIndex >= 0 ? characterIndex : -1,
+      chatIndex: Number.isInteger(chatIndex) && chatIndex >= 0 ? chatIndex : -1,
+      scopeKey: String(source.scopeKey || "").trim(),
+      charSnapshot: source.charSnapshot || source.char || null,
+      chatSnapshot: source.chatSnapshot || source.chat || null,
+      capturedAt: Math.max(0, Number(source.capturedAt || source.at || 0) || 0),
+    };
+  }
+
+  function recentLiveSyncRequestTarget() {
+    const target = normalizeLiveSyncTarget(liveSyncLastRequestTarget || {});
+    if (target.characterIndex < 0 || target.chatIndex < 0) return null;
+    if (target.capturedAt && Date.now() - target.capturedAt > LIVE_SYNC_LAST_REQUEST_TARGET_TTL_MS) return null;
+    return target;
+  }
+
+  function livePersonaPairForAssistantIndex(chat, messageIndex) {
+    const wanted = Number(messageIndex);
+    if (!Number.isInteger(wanted) || wanted < 0) return null;
+    const messages = asArray(chat?.message || chat?.messages || chat?.data);
+    let pendingUser = null;
+    let pairIndex = 0;
+    for (let index = 0; index <= wanted && index < messages.length; index += 1) {
+      const item = messages[index];
+      if (item?.disabled === true || item?.isComment === true) continue;
+      const text = messageText(item);
+      if (!text) continue;
+      if (isUserAuthoredMessage(item)) {
+        pendingUser = { index, text, raw: item };
+        continue;
+      }
+      if (pendingUser && isAssistantTurnMessage(item)) {
+        pairIndex += 1;
+        if (index === wanted) return buildCompletedTurnPair(pendingUser, { index, text, raw: item }, pairIndex);
+        pendingUser = null;
+      }
+    }
+    return null;
+  }
+
+  function collectCompletedTurnPairRange(chat, startPairValue, pairCountValue) {
+    const startPair = Math.max(1, Number(startPairValue || 1) || 1);
+    const pairCount = Math.max(1, Number(pairCountValue || LIVE_SYNC_BATCH_SIZE) || LIVE_SYNC_BATCH_SIZE);
+    const endPair = startPair + pairCount - 1;
+    const messages = asArray(chat?.message || chat?.messages || chat?.data);
+    const batch = [];
+    let pendingUser = null;
+    let pairIndex = 0;
+    for (let index = 0; index < messages.length; index += 1) {
+      const item = messages[index];
+      if (item?.disabled === true || item?.isComment === true) continue;
+      const text = messageText(item);
+      if (!text) continue;
+      if (isUserAuthoredMessage(item)) {
+        pendingUser = { index, text, raw: item };
+        continue;
+      }
+      if (pendingUser && isAssistantTurnMessage(item)) {
+        pairIndex += 1;
+        if (pairIndex >= startPair && pairIndex <= endPair) {
+          batch.push(buildCompletedTurnPair(pendingUser, { index, text, raw: item }, pairIndex));
+        }
+        pendingUser = null;
+        if (pairIndex >= endPair) break;
+      }
+    }
+    return batch;
+  }
+
+  function livePersonaLogicalTurnKey(scopeKey, pair, messageIndex) {
+    const userIdentity = String(pair?.user?.messageId || `index:${Number(pair?.user?.index || 0)}`).trim();
+    return `${String(scopeKey || "")}|user:${userIdentity}|assistant-slot:${Math.max(0, Number(messageIndex || 0) || 0)}`;
+  }
+
+  function livePersonaBatchSourceFingerprint(batch = []) {
+    return hashText(asArray(batch).map((pair) => [
+      Number(pair?.pairIndex || 0),
+      String(pair?.fingerprint || ""),
+      String(pair?.userDigest || ""),
+      String(pair?.assistantDigest || ""),
+    ].join("\u0001")).join("\u0002"));
+  }
+
+  function markLiveSyncRequeue(scopeKey, options = {}, reason = "revision_changed") {
+    const key = String(scopeKey || options?.scopeKey || options?.target?.scopeKey || "").trim();
+    if (!key) return false;
+    const previous = liveSyncRequeueByScope.get(key) || {};
+    const previousCapture = previous.outputCapture || null;
+    const nextCapture = options.outputCapture || null;
+    const useNextCapture = !previousCapture || (nextCapture && (
+      Number(nextCapture.at || 0) > Number(previousCapture.at || 0)
+      || Number(nextCapture.revision || 0) >= Number(previousCapture.revision || 0)
+    ));
+    liveSyncRequeueByScope.set(key, {
+      ...previous,
+      ...options,
+      scopeKey: key,
+      target: normalizeLiveSyncTarget(options.target || previous.target || { scopeKey: key }),
+      outputCapture: useNextCapture ? nextCapture : previousCapture,
+      force: options.force === true || previous.force === true,
+      reason,
+      queuedAt: Date.now(),
+    });
+    return true;
+  }
+
+  function outputCaptureStillCurrent(capture = null) {
+    if (!capture?.turnKey) return { ok: true, reason: "no_output_revision_contract" };
+    const current = liveSyncOutputTurnRevisions.get(String(capture.turnKey));
+    if (!current) return { ok: true, reason: "revision_evicted_batch_hash_authoritative" };
+    if (Number(current.revision || 0) !== Number(capture.revision || 0)
+      || String(current.contentHash || "") !== String(capture.contentHash || "")) {
+      return { ok: false, reason: "output_revision_superseded", current };
+    }
+    return { ok: true, reason: "output_revision_current", current };
+  }
+
+  function processLiveSyncChatOutputEvent(eventValue = {}) {
+    if (pluginUnloaded || cachedEnabledLivePersonaBindingState() === false) return { skipped: true, reason: "no_enabled_live_binding_fast" };
+    const event = eventValue && typeof eventValue === "object" ? eventValue : {};
+    const hasMessageIndex = Object.prototype.hasOwnProperty.call(event, "messageIndex");
+    const messageIndex = Number(event.messageIndex);
+    if (!hasMessageIndex) {
+      // Some older RisuAI/fork builds expose a chat-listener-shaped API but call
+      // output callbacks without the 2026.8.240 event payload. Keep one backend
+      // active and degrade only this event to the pre-v3 targeted chat reconcile.
+      const target = recentLiveSyncRequestTarget();
+      scheduleLivePersonaSyncCheck(LIVE_SYNC_OUTPUT_COALESCE_MS, {
+        target,
+        scopeKey: target?.scopeKey || "",
+        reason: "chat_output_payload_legacy_reconcile",
+      });
+      liveSyncCaptureFallbackReason = "chat_output_payload_missing_compat_reconcile";
+      const compat = { skipped: false, compatibilityReconcile: true, reason: "chat_output_payload_missing", at: Date.now() };
+      liveSyncLastOutputCapture = compat;
+      return compat;
+    }
+    if (!Number.isInteger(messageIndex) || messageIndex < 0) return { skipped: true, reason: "invalid_message_index" };
+    const chat = event.chat && typeof event.chat === "object" ? event.chat : null;
+    const messages = asArray(chat?.message || chat?.messages || chat?.data);
+    const assistantMessage = messages[messageIndex];
+    if (!assistantMessage || !isAssistantTurnMessage(assistantMessage)) return { skipped: true, reason: "assistant_message_missing" };
+    const pair = livePersonaPairForAssistantIndex(chat, messageIndex);
+    if (!pair) return { skipped: true, reason: "logical_turn_not_found" };
+    const target = normalizeLiveSyncTarget({
+      characterIndex: event.characterIndex,
+      chatIndex: event.chatIndex,
+      charSnapshot: event.char,
+      chatSnapshot: event.chat,
+      capturedAt: Date.now(),
+    });
+    const scopeKey = livePersonaScopeKey({
+      charIndex: target.characterIndex,
+      chatIndex: target.chatIndex,
+      char: target.charSnapshot || {},
+      chat: target.chatSnapshot || {},
+    });
+    target.scopeKey = scopeKey;
+    const turnKey = livePersonaLogicalTurnKey(scopeKey, pair, messageIndex);
+    const contentHash = hashText([pair.fingerprint, pair.userDigest, pair.assistantDigest].join("\u0001"));
+    const previous = liveSyncOutputTurnRevisions.get(turnKey);
+    if (previous?.contentHash === contentHash) {
+      const duplicate = { ...previous, at: Date.now(), duplicate: true, skipped: true, reason: "duplicate_output_event" };
+      liveSyncLastOutputCapture = duplicate;
+      return duplicate;
+    }
+    const revision = Math.max(0, Number(previous?.revision || 0) || 0) + 1;
+    const capture = {
+      schema: "lia.live_sync_output_capture.v1",
+      at: Date.now(),
+      source: "risu_chat_output",
+      backend: LIVE_SYNC_CAPTURE_BACKENDS.CHAT_OUTPUT_V3,
+      scopeKey,
+      turnKey,
+      revision,
+      contentHash,
+      pairIndex: Number(pair.pairIndex || 0),
+      messageIndex,
+      characterIndex: target.characterIndex,
+      chatIndex: target.chatIndex,
+      userMessageId: String(pair?.user?.messageId || ""),
+      assistantMessageId: String(pair?.assistant?.messageId || ""),
+      assistantChars: String(pair?.assistant?.text || "").length,
+    };
+    liveSyncOutputTurnRevisions.set(turnKey, capture);
+    while (liveSyncOutputTurnRevisions.size > LIVE_SYNC_OUTPUT_REVISION_MAX) {
+      liveSyncOutputTurnRevisions.delete(liveSyncOutputTurnRevisions.keys().next().value);
+    }
+    liveSyncLastOutputCapture = capture;
+    if (cachedLivePersonaStoreComplete && cachedLivePersonaStore?.bindings) {
+      const cachedBinding = normalizeLivePersonaBinding(cachedLivePersonaStore.bindings[scopeKey] || null);
+      if (!cachedBinding?.enabled) {
+        return { ...capture, skipped: true, reason: "current_chat_not_enabled_cached" };
+      }
+      const pendingPairs = Number(pair.pairIndex || 0) - Math.max(0, Number(cachedBinding.lastProcessedPairCount || 0) || 0);
+      if (revision === 1 && pendingPairs > 0 && pendingPairs < LIVE_SYNC_BATCH_SIZE) {
+        return { ...capture, skipped: true, deferred: true, reason: "waiting_for_live_batch", pending: pendingPairs };
+      }
+    }
+    appendDebugLog("live_sync_capture", "output_revision_upserted", capture, "info");
+    const options = { target, scopeKey, outputCapture: capture, reason: "risu_chat_output" };
+    if (liveSyncInFlightScopes.has(scopeKey)) markLiveSyncRequeue(scopeKey, options, "output_revision_arrived_in_flight");
+    else scheduleLivePersonaSyncCheck(LIVE_SYNC_OUTPUT_COALESCE_MS, options);
+    return capture;
   }
 
   function renderLivePersonaPrompt(binding) {
@@ -7095,7 +10568,81 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     if (!Number.isInteger(chatIndex) || chatIndex < 0) chatIndex = Number(char?.chatPage || 0) || 0;
     let chat = await boundedLiaHostContextCall("getChatFromIndex", () => api.getChatFromIndex?.(charIndex, chatIndex), null);
     if (!chat) chat = asArray(char?.chats)[chatIndex] || { name: "Chat", message: [] };
-    return { db: db || {}, charIndex, chatIndex, char: char || {}, chat: chat || {} };
+    return { db: db || {}, charIndex, chatIndex, char: char || {}, chat: chat || {}, isCurrentContext: true };
+  }
+
+  async function getLiveRuntimeContextForTarget(targetValue = null) {
+    const target = normalizeLiveSyncTarget(targetValue || {});
+    if (target.characterIndex < 0 || target.chatIndex < 0) return await getLiveRuntimeContext();
+    const [db, char, currentCharacterIndexRaw, currentChatIndexRaw] = await Promise.all([
+      boundedLiaHostContextCall("getDatabase", () => api.getDatabase?.(["personas", "selectedPersona"]), {}),
+      boundedLiaHostContextCall("getCharacterFromIndex", () => api.getCharacterFromIndex?.(target.characterIndex), target.charSnapshot || null),
+      boundedLiaHostContextCall("getCurrentCharacterIndex", () => api.getCurrentCharacterIndex?.(), -1),
+      boundedLiaHostContextCall("getCurrentChatIndex", () => api.getCurrentChatIndex?.(), -1),
+    ]);
+    const resolvedChar = char || target.charSnapshot || {};
+    let chat = await boundedLiaHostContextCall(
+      "getChatFromIndex",
+      () => api.getChatFromIndex?.(target.characterIndex, target.chatIndex),
+      target.chatSnapshot || null,
+    );
+    if (!chat) chat = asArray(resolvedChar?.chats)[target.chatIndex] || target.chatSnapshot || { name: "Chat", message: [] };
+    return {
+      db: db || {},
+      charIndex: target.characterIndex,
+      chatIndex: target.chatIndex,
+      char: resolvedChar || {},
+      chat: chat || {},
+      isCurrentContext: Number(currentCharacterIndexRaw) === target.characterIndex
+        && Number(currentChatIndexRaw) === target.chatIndex,
+    };
+  }
+
+  function livePersonaBatchRevisionSnapshot(runtimeCtx, batch, outputCapture = null) {
+    const target = normalizeLiveSyncTarget({
+      characterIndex: runtimeCtx?.charIndex,
+      chatIndex: runtimeCtx?.chatIndex,
+      charSnapshot: runtimeCtx?.char,
+      chatSnapshot: runtimeCtx?.chat,
+      scopeKey: livePersonaScopeKey(runtimeCtx),
+      capturedAt: Date.now(),
+    });
+    return {
+      schema: "lia.live_sync_batch_revision.v1",
+      scopeKey: target.scopeKey,
+      target,
+      startPair: Number(batch?.[0]?.pairIndex || 0),
+      endPair: Number(batch?.[batch.length - 1]?.pairIndex || 0),
+      pairCount: asArray(batch).length,
+      sourceFingerprint: livePersonaBatchSourceFingerprint(batch),
+      prefixFingerprint: MemorySuiteHostLineage.prefixRevision(runtimeCtx?.chat, Number(batch?.[batch.length - 1]?.pairIndex || 0)),
+      fingerprints: asArray(batch).map((pair) => String(pair?.fingerprint || "")),
+      outputCapture: outputCapture ? { ...outputCapture } : null,
+      capturedAt: Date.now(),
+    };
+  }
+
+  async function verifyLivePersonaBatchStillCurrent(snapshotValue = {}) {
+    const snapshot = snapshotValue && typeof snapshotValue === "object" ? snapshotValue : {};
+    const revision = outputCaptureStillCurrent(snapshot.outputCapture || null);
+    if (!revision.ok) return { ok: false, reason: revision.reason, revision };
+    const runtimeCtx = await getLiveRuntimeContextForTarget(snapshot.target || null);
+    const scopeKey = livePersonaScopeKey(runtimeCtx);
+    if (!scopeKey || scopeKey !== String(snapshot.scopeKey || "")) {
+      return { ok: false, reason: "scope_changed", scopeKey };
+    }
+    const startPair = Math.max(1, Number(snapshot.startPair || 1) || 1);
+    const pairCount = Math.max(1, Number(snapshot.pairCount || LIVE_SYNC_BATCH_SIZE) || LIVE_SYNC_BATCH_SIZE);
+    const batch = collectCompletedTurnPairRange(runtimeCtx.chat, startPair, pairCount);
+    if (batch.length !== pairCount) return { ok: false, reason: "batch_incomplete", runtimeCtx, pairs: batch, batch };
+    const sourceFingerprint = livePersonaBatchSourceFingerprint(batch);
+    if (sourceFingerprint !== String(snapshot.sourceFingerprint || "")) {
+      return { ok: false, reason: "batch_source_changed", runtimeCtx, pairs: batch, batch, sourceFingerprint };
+    }
+    if (snapshot.prefixFingerprint && snapshot.prefixFingerprint !== MemorySuiteHostLineage.prefixRevision(runtimeCtx.chat, Number(snapshot.endPair || 0))) {
+      return { ok: false, reason: 'batch_antecedent_changed', runtimeCtx, pairs: batch, batch, sourceFingerprint };
+    }
+    return { ok: true, reason: "batch_revision_current", runtimeCtx, pairs: batch, batch, sourceFingerprint };
   }
 
   function livePersonaBindingChatId(binding) {
@@ -7237,6 +10784,48 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     return { matches: mismatches.length === 0, expected, actual, mismatches };
   }
 
+  function projectNativeBranchPersonaState(targetCtx, sourceBinding) {
+    const lineage = MemorySuiteHostLineage.inspect(targetCtx?.char, targetCtx?.chat);
+    if (lineage.kind !== 'native_branch') return null;
+    const pairs = collectCompletedTurnPairs(targetCtx.chat).slice(0, lineage.commonPrefixPairs);
+    const sourceAnchor = Math.max(0, Number(sourceBinding.anchorPairCount || 0));
+    const result = { hostLineage: lineage, anchorPairCount: Math.min(sourceAnchor, pairs.length),
+      lastProcessedPairCount: Math.min(sourceAnchor, pairs.length), ledgers: [], liveState: [], coreOverlay: [], coreCandidateHistory: {},
+      receipt: { schema: 'lia.native_branch_state.v1', verified: false, reason: 'native_branch_prefix_unverified',
+        sourceScopeKey: sourceBinding.scopeKey, sharedPairs: pairs.length, stateThroughPair: 0,
+        pendingPrefixPairs: pairs.length, latestParentHeadCopied: false } };
+    const sourceCharacterScope = String(sourceBinding.scopeKey || '').split('|chat:')[0];
+    if (sourceCharacterScope !== `char:${lineage.characterId}`) { result.receipt.reason = 'persona_owner_character_mismatch'; return result; }
+    if (lineage.inheritanceEligible !== true || lineage.parentChatId !== livePersonaBindingChatId(sourceBinding)) return result;
+    // An inherited anchor can contain predecessor state with no historical checkpoint.
+    // Do not invent that checkpoint from the parent's current Head.
+    if (sourceBinding.forkedFromScopeKey && sourceAnchor > 0 && sourceBinding.nativeBranchState?.verified !== true) {
+      result.receipt.reason = 'inherited_persona_anchor_unverified'; return result;
+    }
+    if (sourceAnchor > pairs.length) { result.receipt.reason = 'branch_precedes_persona_anchor'; return result; }
+    let cursor = sourceAnchor, gap = false;
+    for (const ledger of asArray(sourceBinding.ledgers)) {
+      if (ledger.startPair > pairs.length || ledger.endPair > pairs.length) break;
+      if (ledger.startPair !== cursor + 1) { gap = true; break; }
+      const slice = pairs.slice(ledger.startPair - 1, ledger.endPair);
+      const fingerprints = slice.map(pair => ledger.fingerprintSchema === LIVE_PERSONA_PAIR_FINGERPRINT_SCHEMA_V2 ? pair.fingerprint : pair.legacyFingerprint);
+      if (slice.length !== ledger.endPair - ledger.startPair + 1 || fingerprints.length !== ledger.fingerprints.length
+        || fingerprints.some((fp, index) => fp !== ledger.fingerprints[index])) { gap = true; break; }
+      result.ledgers.push(JSON.parse(JSON.stringify(ledger)));
+      result.liveState = asArray(ledger.liveStateAfter).map(normalizeLiveStateItem).filter(Boolean);
+      result.coreOverlay = asArray(ledger.coreOverlayAfter).map(normalizeLiveCoreItem).filter(Boolean);
+      result.coreCandidateHistory = JSON.parse(JSON.stringify(ledger.coreCandidateHistoryAfter || {}));
+      cursor = ledger.endPair;
+    }
+    const expected = sourceAnchor + Math.floor(Math.max(0, Math.min(Number(sourceBinding.lastProcessedPairCount || 0), pairs.length) - sourceAnchor) / LIVE_SYNC_BATCH_SIZE) * LIVE_SYNC_BATCH_SIZE;
+    const verified = !gap && cursor >= expected;
+    result.lastProcessedPairCount = cursor;
+    result.receipt = { ...result.receipt, verified,
+      reason: verified ? 'verified_prefix_persona_checkpoint' : 'persona_prefix_ledger_missing_or_changed',
+      stateThroughPair: cursor, pendingPrefixPairs: Math.max(0, pairs.length - cursor) };
+    return result;
+  }
+
   async function forkLivePersonaBindingToContext(targetCtx, sourceBindingInput, options = {}) {
     const sourceBinding = normalizeLivePersonaBinding(sourceBindingInput);
     if (!sourceBinding) throw new Error("Fork할 Source Live Persona binding이 없습니다.");
@@ -7244,6 +10833,19 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     if (!targetScopeKey || targetScopeKey === sourceBinding.scopeKey) {
       return { adopted: false, verified: true, reason: "same_scope", binding: sourceBinding };
     }
+    const nativeBranch = projectNativeBranchPersonaState(targetCtx, sourceBinding);
+    if (nativeBranch?.receipt.reason === 'persona_owner_character_mismatch') throw new Error('lia_native_branch_owner_character_mismatch');
+    const targetRows = targetCtx?.chat?.message || [];
+    const revalidateNativePersonaFork = async () => {
+      if (!nativeBranch) return;
+      const fresh = await getLiveRuntimeContextForChatId(String(targetCtx.chat.id || targetCtx.chat.chatId));
+      const rows = fresh?.chat?.message || [];
+      const proof = MemorySuiteHostLineage.inspect(fresh?.char, fresh?.chat);
+      if (livePersonaScopeKey(fresh) !== targetScopeKey || rows.length !== targetRows.length
+        || !rows.every((row, index) => MemorySuiteHostLineage.same(row, targetRows[index]))
+        || (nativeBranch.hostLineage.inheritanceEligible === true && (proof.inheritanceEligible !== true
+          || proof.parentChatId !== nativeBranch.hostLineage.parentChatId || proof.prefixDigest !== nativeBranch.hostLineage.prefixDigest))) throw new Error('lia_native_branch_revision_changed');
+    };
     const existing = await readLivePersonaBindingByScopeKey(targetScopeKey, true);
     if (existing) {
       const verification = await PersonaBindingManager.inspect(targetCtx, existing).catch(() => null);
@@ -7253,9 +10855,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
         const durableReadback = await verifyDurableLivePersonaBindingReadback(storage, existing);
         return {
           adopted: false,
-          verified: true,
+          verified: existing.nativeBranchState?.verified !== false,
           durableReadbackVerified: durableReadback.durableReadbackVerified === true,
-          reason: "target_already_managed",
+          reason: existing.nativeBranchState?.verified === false ? existing.nativeBranchState.reason : "target_already_managed",
           binding: durableReadback.binding,
           verification,
           durableReadback,
@@ -7276,7 +10878,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const sourcePersona = personas.find((item) => String(item?.id || "") === sourceBinding.sourcePersonaId) || null;
     const snapshot = sourceBinding.originalSnapshot && typeof sourceBinding.originalSnapshot === "object" ? sourceBinding.originalSnapshot : null;
     const template = sourceLivePersona || sourcePersona || snapshot || { name: sourceBinding.sourcePersonaName || "Persona", personaPrompt: sourceBinding.basePersonaPrompt || "" };
-    const inheritedBasePersonaPrompt = (sourceLivePersona ? stripLivePersonaState(sourceLivePersona.personaPrompt || "") : "")
+    const inheritedBasePersonaPrompt = (nativeBranch ? stripLivePersonaState(snapshot?.personaPrompt || sourceBinding.basePersonaPrompt || "") : sourceLivePersona ? stripLivePersonaState(sourceLivePersona.personaPrompt || "") : "")
       || sourceBinding.basePersonaPrompt
       || stripLivePersonaState(sourcePersona?.personaPrompt || snapshot?.personaPrompt || "");
     const pairs = collectCompletedTurnPairs(targetCtx.chat);
@@ -7288,7 +10890,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const provisional = normalizeLivePersonaBinding({
       ...sourceBinding,
       scopeKey: targetScopeKey,
-      enabled: sourceBinding.enabled === true,
+      enabled: sourceBinding.enabled === true && (!nativeBranch || nativeBranch.receipt.verified === true),
+      hostLineage: nativeBranch?.hostLineage || MemorySuiteHostLineage.inspect(targetCtx.char, targetCtx.chat),
+      nativeBranchState: nativeBranch?.receipt || null,
       managerVersion: PERSONA_BINDING_MANAGER_VERSION,
       displayNameVersion: LIVE_PERSONA_DISPLAY_NAME_VERSION,
       previousBinding: sourceBinding.previousBinding,
@@ -7303,15 +10907,15 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       livePersonaName,
       basePersonaPrompt: inheritedBasePersonaPrompt,
       basePromptHash: hashText(inheritedBasePersonaPrompt),
-      anchorPairCount: pairs.length,
-      lastProcessedPairCount: pairs.length,
-      ledgers: [],
-      liveState: sourceBinding.liveState,
-      coreOverlay: sourceBinding.coreOverlay,
-      coreCandidateHistory: {},
+      anchorPairCount: nativeBranch ? nativeBranch.anchorPairCount : pairs.length,
+      lastProcessedPairCount: nativeBranch ? nativeBranch.lastProcessedPairCount : pairs.length,
+      ledgers: nativeBranch ? nativeBranch.ledgers : [],
+      liveState: nativeBranch ? nativeBranch.liveState : sourceBinding.liveState,
+      coreOverlay: nativeBranch ? nativeBranch.coreOverlay : sourceBinding.coreOverlay,
+      coreCandidateHistory: nativeBranch ? nativeBranch.coreCandidateHistory : {},
       lastProcessedAt: "",
       lastError: "",
-      disabledReason: sourceBinding.enabled === true ? "" : sourceBinding.disabledReason,
+      disabledReason: nativeBranch?.receipt.verified === false ? nativeBranch.receipt.reason : sourceBinding.enabled === true ? "" : sourceBinding.disabledReason,
       nextRetryAt: 0,
       forkedFromScopeKey: sourceBinding.scopeKey,
       forkedFromLivePersonaId: sourceBinding.livePersonaId,
@@ -7337,8 +10941,10 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
         `Fork reason: ${forkReason}`,
       ].join("\n"),
     };
+    await revalidateNativePersonaFork();
     const forkWrite = await upsertPersonaFresh(forkPersona);
     try {
+      await revalidateNativePersonaFork();
       const bindResult = await PersonaBindingManager.bindLive(targetCtx, provisional);
       provisional.lastObservedBindingId = bindResult.after.personaId;
       provisional.lastBindingCheckAt = new Date().toISOString();
@@ -7348,6 +10954,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       try { await removeLiaLivePersonaIfUnreferenced(targetCtx, newLivePersonaId, { excludeScopeKey: targetScopeKey, fallbackPersonaId: sourceBinding.sourcePersonaId }); } catch (_) {}
       throw error;
     }
+    await revalidateNativePersonaFork();
     const durableReadback = await writeLivePersonaBinding(provisional);
     const persistedBinding = durableReadback.binding;
     const verification = await PersonaBindingManager.inspect({ ...targetCtx, db: await api.getDatabase?.(["personas", "selectedPersona"]) }, persistedBinding);
@@ -7361,7 +10968,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     try { await resetPersonaProofForBindingChange(targetCtx, persistedBinding.livePersonaId); } catch (_) {}
     appendOperationLog("live_persona_fork", `Live Persona를 새 채팅으로 분기했습니다: ${sourceBinding.livePersonaName || sourceBinding.sourcePersonaName || "Source"} → ${persistedBinding.livePersonaName}`, { sourceScopeKey: sourceBinding.scopeKey, targetScopeKey, reason: forkReason }, "ok");
     appendDebugLog("live_sync", "fork_success", { sourceScopeKey: sourceBinding.scopeKey, targetScopeKey, sourceLivePersonaId: sourceBinding.livePersonaId, targetLivePersonaId: persistedBinding.livePersonaId, anchorPairCount: persistedBinding.anchorPairCount, reason: forkReason, transferId: persistedBinding.handoffTransferId, durableReadbackVerified: true }, "info");
-    return { adopted: true, verified: true, durableReadbackVerified: true, reason: forkReason, binding: persistedBinding, verification, sourceBinding, durableReadback, lineage };
+    return { adopted: true, verified: nativeBranch ? nativeBranch.receipt.verified === true : true, durableReadbackVerified: true, reason: nativeBranch?.receipt.verified === false ? nativeBranch.receipt.reason : forkReason, binding: persistedBinding, verification, sourceBinding, durableReadback, lineage };
   }
 
   async function runLivePersonaForkOnce(targetCtx, sourceBinding, options = {}) {
@@ -7377,26 +10984,31 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const ctx = runtimeCtx || await getLiveRuntimeContext();
     const targetScopeKey = livePersonaScopeKey(ctx);
     const existing = await readLivePersonaBindingByScopeKey(targetScopeKey, options.forceStore === true);
-    if (existing) return { adopted: false, verified: true, reason: "current_scope_managed", binding: existing };
+    if (existing) return { adopted: false, verified: existing.nativeBranchState?.verified !== false, reason: existing.nativeBranchState?.verified === false ? existing.nativeBranchState.reason : "current_scope_managed", binding: existing };
 
     const chatState = await PersonaBindingManager.read(ctx).catch(() => ({ personaId: String(ctx?.chat?.bindedPersona || "") }));
     const boundPersonaId = String(chatState?.personaId || ctx?.chat?.bindedPersona || "").trim();
+    const hostLineage = MemorySuiteHostLineage.inspect(ctx.char, ctx.chat);
     const sourceChatId = String(
-      options.sourceChatId
+      (hostLineage.kind === 'native_branch' ? hostLineage.parentChatId : '')
+      || options.sourceChatId
       || ctx?.chat?.copiedFromChatId
       || ctx?.chat?.memorySessionBridge?.sourceChatId
       || ""
     ).trim();
+    if (!sourceChatId && !boundPersonaId.startsWith(`${LIVE_PERSONA_ID_PREFIX}::`)) {
+      return { adopted: false, verified: false, reason: "no_inheritance_marker" };
+    }
     let owner = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId, livePersonaId: boundPersonaId });
     if (!owner && sourceChatId) owner = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, sourceChatId });
-    if (!owner && boundPersonaId.startsWith(`${LIVE_PERSONA_ID_PREFIX}::`)) {
+    if (!owner && hostLineage.kind !== 'native_branch' && boundPersonaId.startsWith(`${LIVE_PERSONA_ID_PREFIX}::`)) {
       owner = await readLivePersonaOwnerBinding({ currentScopeKey: targetScopeKey, livePersonaId: boundPersonaId });
     }
-    if (!owner) return { adopted: false, verified: false, reason: "no_inherited_live_owner" };
+    if (!owner || (hostLineage.kind === 'native_branch' && livePersonaBindingChatId(owner) !== hostLineage.parentChatId)) return { adopted: false, verified: false, reason: "no_inherited_live_owner" };
     return await runLivePersonaForkOnce(ctx, owner, {
-      reason: options.reason || (sourceChatId ? "chat_handoff" : "native_chat_copy"),
+      reason: hostLineage.kind === 'native_branch' ? 'native_host_branch' : options.reason || (sourceChatId ? "chat_handoff" : "native_chat_copy"),
       sourceChatId: sourceChatId || livePersonaBindingChatId(owner),
-      transferId: options.transferId || ctx?.chat?.memorySessionBridge?.transferId || "",
+      transferId: hostLineage.kind === 'native_branch' ? '' : options.transferId || ctx?.chat?.memorySessionBridge?.transferId || "",
       sourceLivePersonaId: options.sourceLivePersonaId || owner.livePersonaId,
       force: options.force === true,
     });
@@ -7461,6 +11073,99 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     };
   }
 
+  function parseLiaOwnerStore(value, field) {
+    let parsed = value;
+    if (typeof value === 'string') { try { parsed = JSON.parse(value); } catch (_) { parsed = {}; } }
+    const root = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return { root, rows: root[field] && typeof root[field] === 'object' && !Array.isArray(root[field]) ? root[field] : {} };
+  }
+
+  async function prepareVerifiedLiaMetadataShellDeletion(options = {}) {
+    const scopeKey = String(options.scopeKey || options.scopeId || '').trim();
+    const allowedKinds = new Set(['proof_only', 'index_only', 'index_proof_only', 'empty_index_shell']);
+    if (!scopeKey || !allowedKinds.has(String(options.kind || '')) || options.metadataShellVerified !== true
+      || Math.max(0, Number(options.metadataShellObservations || 0) || 0) < 2
+      || !String(options.metadataShellFingerprint || '').trim()) {
+      throw new Error('two stable LIA metadata-shell observations are required');
+    }
+    const emptyIndexShell = String(options.kind || '') === 'empty_index_shell';
+    const current = await getLiveRuntimeContext().catch(() => null);
+    if (!emptyIndexShell && current && livePersonaScopeKey(current) === scopeKey) throw new Error('current LIA scope cannot be deleted as a metadata shell');
+    const indexKey = LIVE_PERSONA_INDEX_STORAGE_KEY;
+    const proofKey = PERSONA_PROOF_STORAGE_KEY;
+    const shardKey = livePersonaScopeStorageKey(scopeKey);
+    const inspect = async () => {
+      const [indexRemote, proofRemote, shardRemote] = await Promise.all([
+        MemorySuiteStorageBridge.serverGet('plugin', indexKey),
+        MemorySuiteStorageBridge.serverGet('plugin', proofKey),
+        MemorySuiteStorageBridge.serverGet('plugin', shardKey)
+      ]);
+      if (shardRemote?.exists === true) throw new Error('LIA metadata shell now has a content shard');
+      const index = parseLiaOwnerStore(indexRemote?.value, 'entries');
+      const proof = parseLiaOwnerStore(proofRemote?.value, 'proofs');
+      if (emptyIndexShell) {
+        if (indexRemote?.exists !== true || Object.keys(index.rows).length !== 0) throw new Error('LIA empty index is missing or no longer empty');
+        return hashText(JSON.stringify({ revision: indexRemote.revision || 0, digest: indexRemote.digest || '' }));
+      }
+      const hasIndex = Object.prototype.hasOwnProperty.call(index.rows, scopeKey);
+      const hasProof = Object.prototype.hasOwnProperty.call(proof.rows, scopeKey);
+      if (!hasIndex && !hasProof) throw new Error('LIA metadata shell is missing');
+      return hashText(JSON.stringify({ index: index.rows[scopeKey] || null, proof: proof.rows[scopeKey] || null,
+        indexRevision: indexRemote?.revision || 0, proofRevision: proofRemote?.revision || 0 }));
+    };
+    const first = await inspect();
+    await new Promise(resolve => setTimeout(resolve, 25));
+    const second = await inspect();
+    if (first !== second) throw new Error('LIA metadata shell changed during owner verification');
+    const localKeys = await MemorySuiteStorageBridge.ownerLegacyKeys('plugin', true);
+    if (emptyIndexShell) {
+      const localRaw = await MemorySuiteStorageBridge.ownerLegacyRead('plugin', indexKey);
+      if (localRaw !== null && localRaw !== undefined && localRaw !== '') {
+        const localIndex = parseLiaOwnerStore(localRaw, 'entries');
+        if (Object.keys(localIndex.rows).length) throw new Error('local LIA index is no longer empty');
+      }
+    }
+    if (localKeys.includes(shardKey)) {
+      const shard = await MemorySuiteStorageBridge.ownerLegacyRead('plugin', shardKey);
+      if (shard !== null && shard !== undefined && shard !== '') throw new Error('LIA metadata shell has a local content shard');
+    }
+    const scope = { scopeId: scopeKey, scopeKey, label: scopeKey, aliases: [] };
+    const beforeMode = await MemorySuiteStorageBridge.getScopeMode(scope);
+    if (beforeMode?.mode === 'server_only') throw new Error('LIA metadata-shell cleanup is blocked in server_only mode');
+    if (beforeMode?.mode !== 'plugin_only') await MemorySuiteStorageBridge.setScopeMode(scope, 'plugin_only');
+    if ((await MemorySuiteStorageBridge.getScopeMode(scope))?.mode !== 'plugin_only') throw new Error('LIA metadata-shell plugin_only transition failed');
+    const rewrite = async (key, field) => {
+      const raw = await MemorySuiteStorageBridge.ownerLegacyRead('plugin', key);
+      if (raw === null || raw === undefined || raw === '') return { removed: false, siblings: 0 };
+      const parsed = parseLiaOwnerStore(raw, field);
+      const existed = Object.prototype.hasOwnProperty.call(parsed.rows, scopeKey);
+      if (existed) delete parsed.rows[scopeKey];
+      parsed.root[field] = parsed.rows;
+      if (!existed) return { removed: false, siblings: Object.keys(parsed.rows).length };
+      if (!Object.keys(parsed.rows).length) await MemorySuiteStorageBridge.ownerLegacyRemove('plugin', key);
+      else await MemorySuiteStorageBridge.ownerLegacyWrite('plugin', key, typeof raw === 'string' ? JSON.stringify(parsed.root) : parsed.root);
+      const readbackRaw = await MemorySuiteStorageBridge.ownerLegacyRead('plugin', key);
+      const readback = parseLiaOwnerStore(readbackRaw, field);
+      if (Object.prototype.hasOwnProperty.call(readback.rows, scopeKey)) throw new Error(`LIA ${field} cleanup readback failed`);
+      return { removed: true, siblings: Object.keys(readback.rows).length };
+    };
+    const localIndex = emptyIndexShell
+      ? (await MemorySuiteStorageBridge.ownerLegacyRead('plugin', indexKey)) == null
+        ? { removed: false, siblings: 0 }
+        : (await MemorySuiteStorageBridge.ownerLegacyRemove('plugin', indexKey), { removed: true, siblings: 0 })
+      : await rewrite(indexKey, 'entries');
+    const localProof = emptyIndexShell ? { removed: false, siblings: 0 } : await rewrite(proofKey, 'proofs');
+    cachedLivePersonaStore = null;
+    cachedLivePersonaStoreComplete = false;
+    cachedPersonaProofStore = null;
+    return {
+      schema: 'memory-suite.server-scope-delete-owner-receipt.v1', namespace: 'lia',
+      pluginId: 'lia_persona_linker', pluginVersion: PLUGIN_VERSION, scopeId: scopeKey,
+      verified: true, modeAfter: 'plugin_only', metadataShell: true,
+      serverAbsenceChecks: 2, serverFingerprint: second, localIndex, localProof, checkedAt: Date.now()
+    };
+  }
+
   async function registerLiaHandoffIpc() {
     if (liaHandoffIpcRegistered) return true;
     if (pluginUnloaded) return false;
@@ -7496,9 +11201,19 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
         } else if (action === "inspect") {
           result = await inspectLiaForRetrace();
         } else if (action === "memory_suite_storage_status") {
+          const connection = await MemorySuiteStorageBridge.getConnectionSettings({ force: true });
+          const recovery = connection?.recoveryRequired && typeof connection.recoveryRequired === "object"
+            ? connection.recoveryRequired
+            : (connection?.status?.recovery && typeof connection.status.recovery === "object" ? connection.status.recovery : null);
+          const recoveryRequired = !!connection?.recoveryRequired || connection?.status?.recoveryRequired === true;
           result = {
-            mode: await MemorySuiteStorageBridge.getMode().catch(() => "plugin_only"),
-            status: MemorySuiteStorageBridge.status(),
+            mode: connection.mode,
+            url: connection.url,
+            scope: connection.scope,
+            recoveryRequired,
+            recovery,
+            syncJob: connection.syncJob,
+            status: { ...(connection.status || {}), recoveryRequired, recovery },
             ownerPluginId: "lia_persona_linker",
             authorizedRequester: RETRACE_PLUGIN_ID
           };
@@ -7518,7 +11233,9 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           };
         } else if (action === "memory_suite_prepare_server_scope_delete") {
           result = {
-            ...(await MemorySuiteStorageBridge.prepareServerScopeDeletion(request.payload || {})),
+            ...(['proof_only', 'index_only', 'index_proof_only', 'empty_index_shell'].includes(String(request.payload?.kind || ''))
+              ? await prepareVerifiedLiaMetadataShellDeletion(request.payload || {})
+              : await MemorySuiteStorageBridge.prepareServerScopeDeletion(request.payload || {})),
             ownerPluginId: "lia_persona_linker",
             authorizedRequester: RETRACE_PLUGIN_ID,
             mutation: "memory_suite_prepare_server_scope_delete"
@@ -7535,7 +11252,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           result = {
             ...result,
             memorySuiteStorage: {
-              mode: await MemorySuiteStorageBridge.getMode().catch(() => "plugin_only"),
+              mode: String(MemorySuiteStorageBridge.status()?.mode || "plugin_only"),
               status: MemorySuiteStorageBridge.status()
             }
           };
@@ -7628,20 +11345,16 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       const before = await this.read(ctx);
       appendDebugLog("binding", "write_start", { scopeKey: livePersonaScopeKey(ctx), reason: String(options.reason || "binding_write"), beforePersonaId: before?.personaId || "", targetPersonaId: String(targetPersonaId || "") });
       if (!before.available) throw new Error("이 RisuAI 환경에서는 채팅 Persona 바인딩 API를 사용할 수 없습니다.");
+      if (options.expectedBeforePersonaId !== undefined && before.personaId !== options.expectedBeforePersonaId) throw new Error('LIA_BINDING_CHANGE_CONFLICT');
       const expected = String(targetPersonaId || "").trim();
       const nextChat = { ...(before.chat || ctx?.chat || {}) };
       if (expected) nextChat.bindedPersona = expected;
       else delete nextChat.bindedPersona;
-      await api.setChatToIndex(ctx.charIndex, ctx.chatIndex, nextChat);
+      const writeResult = await api.setChatToIndex(ctx.charIndex, ctx.chatIndex, nextChat);
+      if (writeResult === false || writeResult?.ok === false || writeResult?.success === false) throw new Error('LIA_CHAT_BINDING_WRITE_REJECTED');
       const after = await this.read(ctx);
       const matched = after.personaId === expected;
       if (!matched) {
-        try {
-          const rollbackChat = { ...(after.chat || nextChat) };
-          if (before.hadExplicitBinding && before.personaId) rollbackChat.bindedPersona = before.personaId;
-          else delete rollbackChat.bindedPersona;
-          await api.setChatToIndex(ctx.charIndex, ctx.chatIndex, rollbackChat);
-        } catch (_) {}
         throw new Error(`RisuAI Persona 바인딩 검증 실패: expected=${expected || "(none)"}, actual=${after.personaId || "(none)"}`);
       }
       if (ctx && typeof ctx === "object") ctx.chat = after.chat || nextChat;
@@ -7691,6 +11404,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       let state = "unconfigured";
       if (!current.available) state = "unavailable";
       else if (!binding) state = current.personaId ? "external" : "unbound";
+      else if (binding.pendingBindingChange) state = "binding_change_pending";
       else if (!livePersonaExists) state = "live_missing";
       else if (expectedMatch) state = binding.enabled ? "connected" : "connected_paused";
       else state = "external_change";
@@ -7839,7 +11553,17 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     const entries = Object.values(store.proofs).sort((a, b) => Date.parse(b.updatedAt || 0) - Date.parse(a.updatedAt || 0));
     store.proofs = Object.fromEntries(entries.slice(0, PERSONA_PROOF_MAX_SCOPES).map((item) => [item.scopeKey, item]));
     const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
-    if (storage?.setItem) await storage.setItem(PERSONA_PROOF_STORAGE_KEY, JSON.stringify(store));
+    if (storage?.setItem) {
+      const serialized = JSON.stringify(store);
+      await setPluginStorageItemChecked(storage, PERSONA_PROOF_STORAGE_KEY, serialized, 'persona_proof_write');
+      const readback = await storage.getItem?.(PERSONA_PROOF_STORAGE_KEY);
+      const normalizedReadback = normalizePersonaProofStore(readback);
+      const expected = normalizePersonaProof(store.proofs[normalized.scopeKey]);
+      const confirmed = normalizePersonaProof(normalizedReadback.proofs[normalized.scopeKey]);
+      if (!expected || !confirmed || hashText(JSON.stringify(expected)) !== hashText(JSON.stringify(confirmed))) {
+        throw new Error(`persona_proof_write readback mismatch for scope: ${normalized.scopeKey}`);
+      }
+    }
     cachedPersonaProofStore = normalizePersonaProofStore(store);
     return normalizePersonaProof(store.proofs[normalized.scopeKey]);
   }
@@ -8134,12 +11858,32 @@ ${revisionText}`);
     let scopeKey = "";
     try {
       let runtimeCtx = await getLiveRuntimeContext();
-      try {
-        const inherited = await ensureInheritedLivePersonaForCurrentChat(runtimeCtx);
-        if (inherited?.adopted) runtimeCtx = await getLiveRuntimeContext();
-      } catch (_) {}
+      let panelState = buildPersonaPanelState(runtimeCtx);
+      let liveBinding = await readLivePersonaBindingForContext(runtimeCtx);
+      const inheritanceSourceChatId = String(runtimeCtx?.chat?.copiedFromChatId || runtimeCtx?.chat?.memorySessionBridge?.sourceChatId || "").trim();
+      const inheritanceHint = !liveBinding && (
+        Boolean(inheritanceSourceChatId)
+        || String(panelState.dynamicId || "").trim().startsWith(`${LIVE_PERSONA_ID_PREFIX}::`)
+      );
+      if (inheritanceHint) {
+        try {
+          const inherited = await ensureInheritedLivePersonaForCurrentChat(runtimeCtx);
+          if (inherited?.adopted) {
+            runtimeCtx = await getLiveRuntimeContext();
+            panelState = buildPersonaPanelState(runtimeCtx);
+            liveBinding = await readLivePersonaBindingForContext(runtimeCtx);
+          }
+        } catch (_) {}
+      }
       scopeKey = livePersonaScopeKey(runtimeCtx);
-      const panelState = buildPersonaPanelState(runtimeCtx);
+      liveSyncLastRequestTarget = normalizeLiveSyncTarget({
+        characterIndex: runtimeCtx.charIndex,
+        chatIndex: runtimeCtx.chatIndex,
+        scopeKey,
+        charSnapshot: runtimeCtx.char,
+        chatSnapshot: runtimeCtx.chat,
+        capturedAt: Date.now(),
+      });
       const snapshot = {
         runtimeCtx,
         personas: panelState.personas,
@@ -8152,8 +11896,8 @@ ${revisionText}`);
         effectiveMode: panelState.effectiveMode,
       };
       const dynamicId = String(snapshot.dynamicPersonaId || "").trim();
+      if (!dynamicId && !liveBinding?.enabled) return messages;
       const effective = snapshot.dynamicPersona || snapshot.selectedPersona || null;
-      const liveBinding = await readLivePersonaBindingForContext(runtimeCtx);
       const requestId = `persona-proof::${Date.now()}::${randomId()}`;
       let proof = {
         ...(await readPersonaProofForContext(runtimeCtx) || {}),
@@ -8198,7 +11942,7 @@ ${revisionText}`);
               : "현재 채팅에는 동적 Persona 바인딩이 없습니다.",
       });
       if (dynamicId) {
-        personaProofPendingRequests.push({ scopeKey, requestId, requestType: String(type || "model"), createdAt: Date.now() });
+        personaProofPendingRequests.push({ scopeKey, requestId, requestType: String(type || "model"), characterIndex: runtimeCtx.charIndex, chatIndex: runtimeCtx.chatIndex, createdAt: Date.now() });
       }
       appendDebugLog("persona_proof", "request_verified", { requestId, scopeKey, requestType: String(type || "model"), personaId: proof.personaId || "", personaName: proof.personaName || "", bindingVerified: proof.bindingVerified === true, promptEvidenceVerified: proof.promptEvidenceVerified === true, trackedAfterRequest: Boolean(dynamicId), elapsedMs: Date.now() - proofStartedAt }, "info");
       while (personaProofPendingRequests.length > 20) personaProofPendingRequests.shift();
@@ -8280,10 +12024,34 @@ ${revisionText}`);
       let granted = true;
       if (typeof api.requestPluginPermission === "function") granted = await api.requestPluginPermission("replacer");
       if (granted && typeof api.addRisuReplacer === "function") {
-        personaProofBeforeReplacer = async (messages, type) => handlePersonaProofBeforeRequest(messages, type);
+        personaProofBeforeReplacer = async (messages, type) => {
+          if (isNarrativePersonaProofRequest(type)) await maybeFailoverSilentLiveSyncBackend();
+          return await handlePersonaProofBeforeRequest(messages, type);
+        };
         personaProofAfterReplacer = async (content, type) => {
           const proofed = await handlePersonaProofAfterRequest(content, type);
-          return await handlePersonaEmotionAssetAfterRequest(proofed, type);
+          const processed = await handlePersonaEmotionAssetAfterRequest(proofed, type);
+          if (liveSyncCaptureBackend === LIVE_SYNC_CAPTURE_BACKENDS.CHAT_OUTPUT_V3
+            && isNarrativePersonaProofRequest(type)) {
+            const target = recentLiveSyncRequestTarget();
+            liveSyncCaptureHealthPending = {
+              schema: "lia.live_sync_capture_health.v1",
+              at: Date.now(),
+              observedRunsAtAfter: Number(liveSyncCaptureObservedRuns || 0),
+              target,
+              scopeKey: target?.scopeKey || "",
+            };
+          }
+          if (liveSyncCaptureBackend === LIVE_SYNC_CAPTURE_BACKENDS.AFTER_REQUEST_RECONCILE
+            && isNarrativePersonaProofRequest(type)) {
+            const target = recentLiveSyncRequestTarget();
+            scheduleLivePersonaSyncCheck(LIVE_SYNC_OUTPUT_COALESCE_MS, {
+              target,
+              scopeKey: target?.scopeKey || "",
+              reason: "legacy_after_request_reconcile",
+            });
+          }
+          return processed;
         };
         await api.addRisuReplacer("beforeRequest", personaProofBeforeReplacer);
         await api.addRisuReplacer("afterRequest", personaProofAfterReplacer);
@@ -8463,11 +12231,14 @@ ${revisionText}`);
     }).join("");
     return `
       <div id="dpg-persona-panel-backdrop" class="lia-persona-panel-backdrop" aria-hidden="true"></div>
-      <aside class="lia-persona-panel" aria-label="Persona 바인딩 패널">
+      <aside class="lia-persona-panel" role="dialog" aria-modal="true" aria-label="페르소나 선택과 바인딩">
         <header class="lia-persona-panel-head">
           <div><span class="lia-kicker">PERSONA BINDING</span><strong>페르소나</strong></div>
           <div class="lia-persona-panel-head-actions"><button id="dpg-persona-panel-refresh" class="btn-soft" type="button" title="RisuAI 상태 재조회">↻</button><button id="dpg-persona-panel-close" class="btn-soft" type="button">닫기</button></div>
         </header>
+        <details class="lia-pocket-fold lia-persona-diagnostics"><summary>연결 상태 확인<span>${htmlEscape(effectiveLabel)}</span></summary>
+        ${MemorySuiteHostLineage.render(MemorySuiteHostLineage.inspect(ctx.char || ctx.character, ctx.chat), { owner: 'lia', chatId: ctx.chat?.id || ctx.chat?.chatId,
+          inheritance: ctx.livePersonaBinding?.nativeBranchState ? `Persona 상태 확인: ${ctx.livePersonaBinding.nativeBranchState.stateThroughPair}턴 · ${ctx.livePersonaBinding.nativeBranchState.reason}` : 'Persona 바인딩 확인과 분기 시점의 상태 검증은 별도입니다.' })}
         <section class="lia-persona-binding-summary">
           <div><span class="lia-binding-swatch risu"></span><b>RisuAI 기본 선택</b><strong>${htmlEscape(selectedLabel)}</strong></div>
           <div><span class="lia-binding-swatch dynamic"></span><b>채팅 동적 바인딩</b><strong>${htmlEscape(dynamicLabel)}</strong></div>
@@ -8482,7 +12253,8 @@ ${revisionText}`);
           <button id="dpg-persona-proof-check" class="btn-soft" type="button">지금 바인딩 확인</button>
         </section>
         <div class="lia-persona-legend"><span><i class="risu"></i> 파랑 · RisuAI 기본 선택(읽기 전용)</span><span><i class="dynamic"></i> 보라 · 현재 채팅 바인딩</span><small>기본 Persona 변경은 RisuAI Persona 설정에서 직접 하세요. 같은 카드면 두 색 테두리가 함께 표시됩니다.</small></div>
-        <label class="lia-persona-search"><span>Persona 찾기</span><input id="dpg-persona-filter" type="search" placeholder="이름 또는 메모 검색"></label>
+        </details>
+        <label class="lia-persona-search"><span>페르소나 찾기</span><input id="dpg-persona-filter" type="search" placeholder="이름 또는 메모 검색"></label>
         <div class="lia-persona-card-list">${cards || `<div class="lia-persona-empty">RisuAI에 저장된 Persona가 없습니다.</div>`}</div>
         <footer class="lia-persona-panel-foot">
           <button id="dpg-persona-unbind" class="btn-soft" type="button"${state.dynamicId ? "" : " disabled"}>채팅 바인딩 해제</button>
@@ -8501,8 +12273,76 @@ ${revisionText}`);
     return { source, index, choice: livePersonaChoiceValue(source, index) };
   }
 
+  const livePersonaBindingChanges = new Set();
+  const livePersonaConfigurationScopes = new Set();
+  async function resumeLivePersonaBindingChange(ctx, binding) {
+    const pending = binding?.pendingBindingChange;
+    if (!pending) return binding;
+    const scopeKey = livePersonaScopeKey(ctx);
+    if (pending.schema !== 'lia.binding_change.v1' || !pending.id || pending.scopeKey !== scopeKey
+      || pending.completedBinding?.scopeKey !== scopeKey || binding.scopeKey !== scopeKey
+      || !['configure', 'native_unbind'].includes(pending.kind)
+      || (pending.kind === 'configure' && (!pending.persona?.id || pending.persona.id !== pending.completedBinding.livePersonaId))) {
+      throw new Error('LIA_BINDING_CHANGE_INVALID');
+    }
+    if (livePersonaBindingChanges.has(scopeKey)) throw new Error('LIA_BINDING_CHANGE_BUSY');
+    livePersonaBindingChanges.add(scopeKey);
+    try {
+      const current = await readLivePersonaBindingByScopeKey(scopeKey, true);
+      if (current?.pendingBindingChange?.id !== pending.id) throw new Error('LIA_BINDING_CHANGE_SUPERSEDED');
+      const actual = await PersonaBindingManager.read(ctx);
+      const targetId = pending.kind === 'configure' ? pending.persona.id : '';
+      if (livePersonaScopeKey({ ...ctx, chat: actual.chat }) !== scopeKey
+        || ![pending.beforePersonaId, targetId].includes(actual.personaId)) throw new Error('LIA_BINDING_CHANGE_CONFLICT');
+      if (pending.persona) {
+        const db = await api.getDatabase(['personas', 'selectedPersona']);
+        const existing = asArray(db?.personas).find(item => item.id === targetId) || null;
+        const matches = value => JSON.stringify(existing) === JSON.stringify(value);
+        if (!matches(pending.beforePersona) && !matches(pending.persona)) throw new Error('LIA_BINDING_CHANGE_PERSONA_CONFLICT');
+        if (!matches(pending.persona)) await upsertPersonaFresh(pending.persona);
+      }
+      await PersonaBindingManager.write(ctx, targetId, { reason: pending.kind,
+        expectedBeforePersonaId: actual.personaId });
+      if (pending.persona) {
+        const verified = await api.getDatabase(['personas']);
+        const actualPersona = asArray(verified?.personas).find(item => item.id === targetId);
+        if (JSON.stringify(actualPersona) !== JSON.stringify(pending.persona)) throw new Error('LIA_BINDING_CHANGE_PERSONA_CONFLICT');
+      }
+      const completed = normalizeLivePersonaBinding({ ...pending.completedBinding, pendingBindingChange: null,
+        lastObservedBindingId: targetId, lastBindingCheckAt: new Date().toISOString(),
+        lastError: '', bindingError: '', updatedAt: new Date().toISOString() });
+      await writeLivePersonaBinding(completed, { completeChangeId: pending.id });
+      return completed;
+    } finally { livePersonaBindingChanges.delete(scopeKey); }
+  }
+
+  async function commitLivePersonaBindingChange(ctx, completedBinding, persona = null) {
+    const scopeKey = livePersonaScopeKey(ctx);
+    const current = await readLivePersonaBindingByScopeKey(scopeKey, true);
+    if (current?.pendingBindingChange) throw new Error('LIA_BINDING_CHANGE_PENDING');
+    const before = await PersonaBindingManager.read(ctx);
+    if (livePersonaScopeKey({ ...ctx, chat: before.chat }) !== scopeKey) throw new Error('LIA_BINDING_CHANGE_SCOPE_CHANGED');
+    const db = persona ? await api.getDatabase(['personas', 'selectedPersona']) : null;
+    const beforePersona = persona ? asArray(db?.personas).find(item => item.id === persona.id) || null : null;
+    const targetPersona = persona ? { ...(beforePersona || {}), ...persona } : null;
+    const pending = { schema: 'lia.binding_change.v1', id: randomId(), scopeKey,
+      kind: persona ? 'configure' : 'native_unbind', beforePersonaId: before.personaId,
+      beforePersona,
+      persona: targetPersona, completedBinding: { ...completedBinding, pendingBindingChange: null } };
+    // Persist intent before changing the host. A failed final write leaves a replayable operation.
+    const staged = normalizeLivePersonaBinding({ ...completedBinding, enabled: true,
+      bindingStatus: 'binding_change_pending', pendingBindingChange: pending });
+    await writeLivePersonaBinding(staged);
+    return await resumeLivePersonaBindingChange(ctx, staged);
+  }
+
   async function configureLivePersonaSync(ctx, sourceChoice, policy = "conservative", externalChangePolicy = "safe", managerOptions = {}) {
     const scopeKey = livePersonaScopeKey(ctx);
+    if (livePersonaConfigurationScopes.has(scopeKey) || (liveSyncInFlightScopes.has(scopeKey) && managerOptions.fromLiveSync !== true)) throw new Error('LIA_BINDING_CHANGE_BUSY');
+    livePersonaConfigurationScopes.add(scopeKey);
+    try {
+    const unfinished = await readLivePersonaBindingByScopeKey(scopeKey, true);
+    if (unfinished?.pendingBindingChange) await resumeLivePersonaBindingChange(ctx, unfinished);
     const db = await api.getDatabase?.(["personas", "selectedPersona"]);
     const personas = asArray(db?.personas).slice();
     const source = resolveLivePersonaChoice(personas, sourceChoice);
@@ -8580,23 +12420,8 @@ ${revisionText}`);
       personaPrompt: renderLivePersonaPrompt(provisionalBinding),
       note: [LIVE_PERSONA_NOTE_MARKER, `Source persona id: ${sourceId}`, `Source persona name: ${source.name || ""}`, `Chat scope: ${scopeKey}`].join("\n"),
     };
-    const liveWrite = await upsertPersonaFresh(livePersona);
-    const createdNewLive = liveWrite.created;
-    try {
-      const bindResult = await PersonaBindingManager.bindLive(ctx, provisionalBinding);
-      provisionalBinding.lastObservedBindingId = bindResult.after.personaId;
-      provisionalBinding.lastBindingCheckAt = new Date().toISOString();
-      provisionalBinding.bindingStatus = "connected";
-      provisionalBinding.bindingError = "";
-    } catch (error) {
-      provisionalBinding.bindingStatus = "error";
-      provisionalBinding.bindingError = String(error?.message || error);
-      if (createdNewLive) {
-        try { await removeLiaLivePersonaIfUnreferenced(ctx, livePersonaId, { excludeScopeKey: scopeKey, fallbackPersonaId: sourceId }); } catch (_) {}
-      }
-      throw error;
-    }
-    await writeLivePersonaBinding(provisionalBinding);
+    provisionalBinding.bindingStatus = "connected";
+    const committedBinding = await commitLivePersonaBindingChange(ctx, provisionalBinding, livePersona);
     // Do not auto-delete an established Live Persona when the source changes.
     // A native RisuAI Persona switch must never make a previously created LIA
     // Persona disappear. Old Live Personas are retained until an explicit user
@@ -8604,7 +12429,8 @@ ${revisionText}`);
     if (oldLivePersonaId && oldLivePersonaId !== livePersonaId) {
       provisionalBinding.retiredLivePersonaId = oldLivePersonaId;
     }
-    return provisionalBinding;
+    return committedBinding;
+    } finally { livePersonaConfigurationScopes.delete(scopeKey); }
   }
 
   async function disableLivePersonaSyncKeepCurrent(ctx) {
@@ -8678,10 +12504,19 @@ ${revisionText}`);
     return delta;
   }
 
-  async function applyLivePersonaPrompt(runtimeCtx, binding) {
+  async function applyLivePersonaPrompt(runtimeCtx, binding, options = {}) {
     let prompt = "";
     const livePersonaName = livePersonaDisplayName(binding.sourcePersonaName || binding.originalSnapshot?.name);
-    await mutatePersonaFresh(binding.livePersonaId, (currentPersona) => {
+    await mutatePersonaFresh(binding.livePersonaId, async (currentPersona) => {
+      if (typeof options.commitGuard === "function") {
+        const guard = await options.commitGuard();
+        if (!guard?.ok) {
+          const error = new Error(`Live Persona source revision was superseded: ${guard?.reason || "unknown"}`);
+          error.code = LIVE_SYNC_SOURCE_SUPERSEDED_CODE;
+          error.guard = guard;
+          throw error;
+        }
+      }
       const currentPrompt = String(currentPersona?.personaPrompt || "");
       const currentHash = hashText(currentPrompt);
       if (binding.lastAppliedPromptHash && currentHash !== binding.lastAppliedPromptHash) {
@@ -8705,19 +12540,46 @@ ${revisionText}`);
     if (!options.force && cachedEnabledLivePersonaBindingState() === false) {
       return { skipped: true, reason: "no_enabled_live_binding_fast" };
     }
-    const runtimeCtx = await getLiveRuntimeContext();
+    const target = normalizeLiveSyncTarget(options.target || {});
+    const runtimeCtx = await getLiveRuntimeContextForTarget(target);
     try { await ensureInheritedLivePersonaForCurrentChat(runtimeCtx); } catch (_) {}
     const scopeKey = livePersonaScopeKey(runtimeCtx);
+    if (livePersonaConfigurationScopes.has(scopeKey)) {
+      scheduleLivePersonaSyncCheck(LIVE_SYNC_REQUEUE_DELAY_MS, options);
+      return { skipped: true, reason: 'binding_configuration_in_flight' };
+    }
     let binding = await readLivePersonaBindingByScopeKey(scopeKey, true);
     if (!binding) return { skipped: true, reason: "current_chat_not_configured" };
+    if (binding.pendingBindingChange) binding = await resumeLivePersonaBindingChange(runtimeCtx, binding);
     if (!binding.enabled) return { skipped: true, reason: "current_chat_not_enabled" };
-    if (liveSyncInFlightScopes.has(scopeKey)) return { skipped: true, reason: "in_flight" };
+    if (liveSyncInFlightScopes.has(scopeKey)) {
+      markLiveSyncRequeue(scopeKey, { ...options, target: { ...target, scopeKey } }, "in_flight_revision_requeue");
+      return { skipped: true, reason: "in_flight_requeued", scopeKey };
+    }
     if (!options.force && binding.nextRetryAt && Date.now() < binding.nextRetryAt) return { skipped: true, reason: "retry_backoff" };
     liveSyncInFlightScopes.add(scopeKey);
     try {
       // Native RisuAI Persona selection is authoritative user input. Track it by
       // identity instead of index because persona array edits can shift indices.
-      const selectedSnapshot = selectedPersonaSnapshotFromDb(runtimeCtx.db);
+      const selectedSnapshot = runtimeCtx.isCurrentContext === false
+        ? (() => {
+            const personas = asArray(runtimeCtx.db?.personas);
+            const stableId = String(
+              (binding.lastObservedSelectedPersonaId && binding.lastObservedSelectedPersonaId !== binding.livePersonaId
+                ? binding.lastObservedSelectedPersonaId
+                : binding.sourcePersonaId) || ""
+            ).trim();
+            const persona = personas.find((item) => String(item?.id || "").trim() === stableId) || null;
+            return {
+              index: persona ? personas.indexOf(persona) : -1,
+              id: stableId,
+              key: String(binding.lastObservedSelectedPersonaKey || (stableId ? `id:${stableId}` : "")),
+              name: String(persona?.name || binding.sourcePersonaName || "").trim(),
+              persona,
+              backgroundTarget: true,
+            };
+          })()
+        : selectedPersonaSnapshotFromDb(runtimeCtx.db);
       const selectedPersona = selectedSnapshot.persona;
       const selectedId = selectedSnapshot.id;
       const managedSelection = Boolean(selectedId && (selectedId === binding.sourcePersonaId || selectedId === binding.livePersonaId));
@@ -8768,7 +12630,7 @@ ${revisionText}`);
               livePersonaChoiceValue(selectedPersona, selectedIndex),
               binding.policy,
               "follow",
-              { previousBinding: binding.previousBinding, resetLedger: true },
+              { fromLiveSync: true, previousBinding: binding.previousBinding, resetLedger: true },
             );
             return { skipped: true, reason: "native_selected_persona_followed", binding: followed };
           }
@@ -8784,8 +12646,7 @@ ${revisionText}`);
           binding.lastError = "";
           binding.bindingError = "";
           binding.updatedAt = new Date().toISOString();
-          await writeLivePersonaBinding(binding);
-          try { await PersonaBindingManager.write(runtimeCtx, "", { reason: "native_selected_persona_changed" }); } catch (_) {}
+          binding = await commitLivePersonaBindingChange(runtimeCtx, binding);
           return { skipped: true, reason: "native_selected_persona_changed", binding, selectedPersonaId: selectedId };
         }
         await writeLivePersonaBinding(binding);
@@ -8819,7 +12680,7 @@ ${revisionText}`);
               follow.choice,
               binding.policy,
               "follow",
-              { previousBinding: binding.previousBinding, resetLedger: String(follow.source?.id || "") !== binding.sourcePersonaId },
+              { fromLiveSync: true, previousBinding: binding.previousBinding, resetLedger: String(follow.source?.id || "") !== binding.sourcePersonaId },
             );
             return { skipped: true, reason: "external_binding_followed", binding: followed };
           }
@@ -8847,40 +12708,82 @@ ${revisionText}`);
       const startPair = binding.lastProcessedPairCount + 1;
       const batch = pairs.slice(startPair - 1, startPair - 1 + LIVE_SYNC_BATCH_SIZE);
       if (batch.length < LIVE_SYNC_BATCH_SIZE) return { skipped: true, reason: "incomplete_batch", pending };
+      const sourceRevision = livePersonaBatchRevisionSnapshot(runtimeCtx, batch, options.outputCapture || null);
       const delta = await analyzeLivePersonaBatch(runtimeCtx, binding, batch);
-      binding.liveState = delta.liveState;
-      const promoted = applyLiveCoreCandidates(binding, delta.coreCandidates, batch[batch.length - 1].pairIndex);
-      binding.coreCandidateHistory = promoted.history;
-      binding.coreOverlay = binding.policy === "auto" ? promoted.overlay : binding.coreOverlay;
-      binding.lastProcessedPairCount = batch[batch.length - 1].pairIndex;
-      binding.lastProcessedAt = new Date().toISOString();
-      binding.lastError = "";
-      binding.disabledReason = "";
-      binding.nextRetryAt = 0;
-      binding.ledgers = [...binding.ledgers, {
+      const precommit = await verifyLivePersonaBatchStillCurrent(sourceRevision);
+      if (!precommit.ok) {
+        const latestCapture = sourceRevision.outputCapture?.turnKey
+          ? liveSyncOutputTurnRevisions.get(sourceRevision.outputCapture.turnKey) || null
+          : null;
+        markLiveSyncRequeue(scopeKey, {
+          ...options,
+          target: sourceRevision.target,
+          outputCapture: latestCapture || options.outputCapture || null,
+        }, precommit.reason || "source_revision_superseded");
+        appendDebugLog("live_sync", "batch_stale_discarded", {
+          scopeKey,
+          range: [sourceRevision.startPair, sourceRevision.endPair],
+          reason: precommit.reason,
+          expectedSourceFingerprint: sourceRevision.sourceFingerprint,
+          currentSourceFingerprint: precommit.sourceFingerprint || "",
+          outputCapture: sourceRevision.outputCapture || null,
+        }, "warn");
+        return { skipped: true, stale: true, reason: precommit.reason || "source_revision_superseded", sourceRevision };
+      }
+      const nextBinding = normalizeLivePersonaBinding({ ...binding }) || { ...binding };
+      nextBinding.liveState = delta.liveState;
+      const promoted = applyLiveCoreCandidates(nextBinding, delta.coreCandidates, batch[batch.length - 1].pairIndex);
+      nextBinding.coreCandidateHistory = promoted.history;
+      nextBinding.coreOverlay = nextBinding.policy === "auto" ? promoted.overlay : nextBinding.coreOverlay;
+      nextBinding.lastProcessedPairCount = batch[batch.length - 1].pairIndex;
+      nextBinding.lastProcessedAt = new Date().toISOString();
+      nextBinding.lastError = "";
+      nextBinding.disabledReason = "";
+      nextBinding.nextRetryAt = 0;
+      nextBinding.ledgers = [...nextBinding.ledgers, {
         id: `live-ledger::${randomId()}`,
         startPair: batch[0].pairIndex,
         endPair: batch[batch.length - 1].pairIndex,
         fingerprints: batch.map((pair) => pair.fingerprint),
         fingerprintSchema: LIVE_PERSONA_PAIR_FINGERPRINT_SCHEMA_V2,
-        createdAt: binding.lastProcessedAt,
+        createdAt: nextBinding.lastProcessedAt,
         summary: delta.summary,
-        liveStateAfter: binding.liveState,
-        coreOverlayAfter: binding.coreOverlay,
-        coreCandidateHistoryAfter: binding.coreCandidateHistory,
+        liveStateAfter: nextBinding.liveState,
+        coreOverlayAfter: nextBinding.coreOverlay,
+        coreCandidateHistoryAfter: nextBinding.coreCandidateHistory,
         ignoredTransient: delta.ignoredTransient,
+        sourceRevision: {
+          schema: sourceRevision.schema,
+          sourceFingerprint: sourceRevision.sourceFingerprint,
+          outputTurnKey: String(sourceRevision.outputCapture?.turnKey || ""),
+          outputRevision: Number(sourceRevision.outputCapture?.revision || 0),
+          captureBackend: liveSyncCaptureBackend,
+        },
       }].slice(-LIVE_SYNC_LEDGER_MAX);
-      await applyLivePersonaPrompt(runtimeCtx, binding);
-      await writeLivePersonaBinding(binding);
-      await recordPersonaProofLiveSync(runtimeCtx, binding, [batch[0].pairIndex, batch[batch.length - 1].pairIndex]);
-      if (typeof document !== "undefined" && document.getElementById("dpg-preview-root") && activeWorkspaceTab === "realtime") {
+      const commitGuard = async () => await verifyLivePersonaBatchStillCurrent(sourceRevision);
+      await applyLivePersonaPrompt(precommit.runtimeCtx || runtimeCtx, nextBinding, { commitGuard });
+      await writeLivePersonaBinding(nextBinding);
+      binding = nextBinding;
+      await recordPersonaProofLiveSync(precommit.runtimeCtx || runtimeCtx, binding, [batch[0].pairIndex, batch[batch.length - 1].pairIndex]);
+      if (typeof document !== "undefined" && document.getElementById("dpg-preview-root") && ["home", "realtime"].includes(activeWorkspaceTab)) {
         try { await refreshPreview({ skipCapture: true }); } catch (_) {}
       }
       const syncRange = [batch[0].pairIndex, batch[batch.length - 1].pairIndex];
-      appendOperationLog("live_sync", `Live Persona 갱신 완료 · TURN ${syncRange[0]}~${syncRange[1]}`, { personaName: binding.livePersonaName, liveStateCount: binding.liveState.length, coreOverlayCount: binding.coreOverlay.length }, "ok");
-      appendDebugLog("live_sync", "batch_success", { scopeKey, range: syncRange, personaId: binding.livePersonaId, personaName: binding.livePersonaName, summary: delta.summary, liveState: delta.liveState, coreCandidates: delta.coreCandidates, ignoredTransient: delta.ignoredTransient }, "info");
-      return { ok: true, binding, delta, range: syncRange };
+      appendOperationLog("live_sync", `Live Persona 갱신 완료 · TURN ${syncRange[0]}~${syncRange[1]}`, { personaName: binding.livePersonaName, liveStateCount: binding.liveState.length, coreOverlayCount: binding.coreOverlay.length, captureBackend: liveSyncCaptureBackend }, "ok");
+      appendDebugLog("live_sync", "batch_success", { scopeKey, range: syncRange, personaId: binding.livePersonaId, personaName: binding.livePersonaName, summary: delta.summary, liveState: delta.liveState, coreCandidates: delta.coreCandidates, ignoredTransient: delta.ignoredTransient, sourceRevision, captureBackend: liveSyncCaptureBackend }, "info");
+      return { ok: true, binding, delta, range: syncRange, sourceRevision };
     } catch (error) {
+      if (String(error?.code || "") === LIVE_SYNC_SOURCE_SUPERSEDED_CODE) {
+        const guard = error?.guard || {};
+        const latestCapture = options.outputCapture?.turnKey
+          ? liveSyncOutputTurnRevisions.get(options.outputCapture.turnKey) || null
+          : null;
+        markLiveSyncRequeue(scopeKey, { ...options, target: { ...target, scopeKey }, outputCapture: latestCapture || options.outputCapture || null }, guard.reason || "commit_guard_superseded");
+        appendDebugLog("live_sync", "commit_stale_discarded", { scopeKey, reason: guard.reason || "source_revision_superseded", guard }, "warn");
+        return { skipped: true, stale: true, reason: guard.reason || "source_revision_superseded" };
+      }
+      const pendingBinding = await readLivePersonaBindingByScopeKey(scopeKey, true).catch(() => null);
+      if (pendingBinding?.pendingBindingChange) binding = pendingBinding;
       binding.lastError = String(error?.message || error);
       binding.nextRetryAt = Date.now() + 60000;
       binding.updatedAt = new Date().toISOString();
@@ -8890,20 +12793,34 @@ ${revisionText}`);
       throw error;
     } finally {
       liveSyncInFlightScopes.delete(scopeKey);
+      const queued = liveSyncRequeueByScope.get(scopeKey) || null;
+      if (queued) {
+        liveSyncRequeueByScope.delete(scopeKey);
+        scheduleLivePersonaSyncCheck(LIVE_SYNC_REQUEUE_DELAY_MS, { ...queued, reason: queued.reason || "revision_requeue" });
+      }
     }
   }
 
-  function scheduleLivePersonaSyncCheck(delayMs = 650) {
-    if (cachedEnabledLivePersonaBindingState() === false) {
-      if (liveSyncOutputDebounce) clearTimeout(liveSyncOutputDebounce);
-      liveSyncOutputDebounce = null;
-      return false;
-    }
-    if (liveSyncOutputDebounce) clearTimeout(liveSyncOutputDebounce);
-    liveSyncOutputDebounce = setTimeout(() => {
-      liveSyncOutputDebounce = null;
-      checkLivePersonaSync().catch(() => {});
-    }, Math.max(100, Number(delayMs || 650)));
+  function scheduleLivePersonaSyncCheck(delayMs = LIVE_SYNC_OUTPUT_COALESCE_MS, options = {}) {
+    if (!options.force && cachedEnabledLivePersonaBindingState() === false) return false;
+    const target = normalizeLiveSyncTarget(options.target || {});
+    const scopeKey = String(options.scopeKey || target.scopeKey || "__current__").trim() || "__current__";
+    const previous = liveSyncScheduledChecks.get(scopeKey);
+    if (previous?.timer) clearTimeout(previous.timer);
+    const task = {
+      ...options,
+      target,
+      scopeKey: scopeKey === "__current__" ? "" : scopeKey,
+      scheduledAt: Date.now(),
+    };
+    const timer = setTimeout(() => {
+      const current = liveSyncScheduledChecks.get(scopeKey);
+      if (current?.timer === timer) liveSyncScheduledChecks.delete(scopeKey);
+      checkLivePersonaSync(task).catch((error) => {
+        appendDebugLog("live_sync_capture", "scheduled_check_failed", { scopeKey, reason: task.reason || "", error: errorForLog(error) }, "error");
+      });
+    }, Math.max(40, Number(delayMs || LIVE_SYNC_OUTPUT_COALESCE_MS) || LIVE_SYNC_OUTPUT_COALESCE_MS));
+    liveSyncScheduledChecks.set(scopeKey, { timer, task });
     return true;
   }
 
@@ -8953,8 +12870,8 @@ ${revisionText}`);
     const moduleDescriptions = contextOptions.moduleLore ? collectModuleDescriptions(activeModules, maxChars) : [];
     const allLoreSignals = collectLoreSignals(char, chat, activeModules, maxEntries, maxChars);
     const loreCandidates = filterLoreSignalsByOptions(allLoreSignals, contextOptions);
-    const rerankBase = { db, charIndex, chatIndex, char, chat, personaInfo, contextOptions, characterDescription, allActiveModules, activeModules, moduleDescriptions, loreCandidates, allLoreSignals };
-    const worldLoreRerank = rerankLoreEntries(loreCandidates, rerankBase, "world", WORLD_LORE_TOP_K);
+    const rerankBase = { db, charIndex, chatIndex, char, chat, personaInfo, contextOptions, characterDescription, allActiveModules, activeModules, moduleDescriptions, loreCandidates, allLoreSignals, maxEntries, maxChars };
+    const worldLoreRerank = await rerankWorldLoreEntriesWithCompute(loreCandidates, rerankBase, WORLD_LORE_TOP_K);
     const worldLoreSignals = worldLoreRerank.selected;
     const blueprintContext = { ...rerankBase, worldLoreRerank, worldLoreSignals, loreSignals: worldLoreSignals, loreRerank: { world: worldLoreRerank } };
     const blueprintState = await readWorldBlueprintForContext(blueprintContext);
@@ -10778,8 +14695,8 @@ ${revisionText}`);
   function captureGeneratedOutputState() {
     if (typeof document === "undefined") return;
     const activeTab = document.querySelector(".dpg-tab-button.active[data-workspace-tab]");
-    const activeName = String(activeTab?.getAttribute("data-workspace-tab") || "").trim();
-    if (["generate", "edit", "realtime", "assets", "vault", "settings", "server"].includes(activeName)) activeWorkspaceTab = activeName;
+    const activeName = String(document.querySelector(".lia-app-layout")?.dataset?.page || activeTab?.getAttribute("data-workspace-tab") || "").trim();
+    if (["home", "generate", "edit", "realtime", "assets", "vault", "settings", "server"].includes(activeName)) activeWorkspaceTab = activeName;
     const layout = document.querySelector(".lia-app-layout");
     if (layout) {
       preservedWorldDrawerOpen = layout.classList.contains("world-drawer-open");
@@ -11311,7 +15228,7 @@ ${revisionText}`);
           <section><header><b>World Blueprint용</b><small>Top ${WORLD_LORE_TOP_K} · 컷 ${Math.round(Number(world?.minimumScore || 0) * 100)}</small></header>${renderLoreRerankRows(world, 14)}</section>
           <section><header><b>Persona 생성용</b><small>Top ${PERSONA_LORE_TOP_K} · 컷 ${Math.round(Number(persona?.minimumScore || 0) * 100)}</small></header>${renderLoreRerankRows(persona, 12)}</section>
         </div>
-        <p class="lia-rerank-note">추가 LLM 호출 없이 로컬 점수화만 사용합니다. alwaysActive/constant 및 강한 세계 규칙은 Top-K 경쟁과 무관하게 보호됩니다.</p>
+        <p class="lia-rerank-note">추가 LLM 호출 없이 로컬 점수화만 사용합니다. 강한 부정/금지 세계 규칙은 항상 보호하고, 일반 alwaysActive/constant 항목은 별도 soft 보호 예산 안에서 선별합니다.</p>
       </details>`;
   }
 
@@ -13910,11 +17827,17 @@ ${revisionText}`);
       } else {
         personas.push(persona);
       }
-      await api.setDatabase?.({ personas });
+      const expected = JSON.parse(JSON.stringify(personas.find(item => item.id === targetId)));
+      if (typeof api.setDatabase !== 'function') throw new Error('LIA_PERSONA_WRITE_UNAVAILABLE');
+      const writeResult = await api.setDatabase({ personas });
+      if (writeResult === false || writeResult?.ok === false || writeResult?.success === false) throw new Error('LIA_PERSONA_WRITE_REJECTED');
       const verify = await api.getDatabase?.(["personas", "selectedPersona"]);
       const verifyPersonas = asArray(verify?.personas);
       const index = verifyPersonas.findIndex((item) => String(item?.id || "").trim() === targetId);
       if (index < 0) throw new Error("생성 Persona 저장 후 RisuAI readback 검증에 실패했습니다.");
+      if (['name', 'personaPrompt', 'note', 'icon', 'image', 'largePortrait'].some(field => JSON.stringify(verifyPersonas[index]?.[field]) !== JSON.stringify(expected?.[field]))) {
+        throw new Error('LIA_PERSONA_READBACK_MISMATCH');
+      }
       return { action, persona: verifyPersonas[index], personaIndex: index };
     });
   }
@@ -14176,8 +18099,8 @@ ${revisionText}`);
       const date = formatVaultDate(item.updatedAt || item.createdAt);
       const identity = [spec?.speciesRace, spec?.gender, spec?.role].filter(Boolean).join(" · ");
       const profile = PERSONA_VARIANT_PROFILES[normalizePersonaVariantProfile(item.activePersonaProfile || "full")];
-      return `<button type="button" class="lia-vault-card ${item.id === selectedId ? "active" : ""}" data-vault-card-id="${htmlEscape(item.id)}">
-        <header><strong>${htmlEscape(item.personaName || item.title || "LIA Persona")}</strong><span>${htmlEscape(generationModeLabel(item.generationMode))}</span></header>
+      return `<button type="button" class="lia-vault-card ${item.id === selectedId ? "active" : ""}" data-vault-card-id="${htmlEscape(item.id)}" aria-label="${htmlEscape(item.personaName || item.title || "페르소나")} 선택" aria-pressed="${item.id === selectedId}">
+        <span class="lia-vault-avatar" aria-hidden="true">${pocketIcon("persona")}</span><header><strong>${htmlEscape(item.personaName || item.title || "LIA Persona")}</strong><span>${htmlEscape(generationModeLabel(item.generationMode))}</span></header>
         <p>${htmlEscape(identity || limitText(spec?.personality || item.title || "Persona", 120))}</p>
         <div class="lia-vault-card-meta">
           <span>${lineage ? `Rev.${lineage.revision}` : "Legacy"}</span>
@@ -14358,6 +18281,90 @@ ${revisionText}`);
     `;
   }
 
+  function pocketPrimaryTab(tab) {
+    if (["home", "edit", "realtime", "assets"].includes(tab)) return "home";
+    return tab === "server" ? "settings" : tab;
+  }
+
+  function pocketIcon(name) {
+    const paths = {
+      persona:'<circle cx="12" cy="7" r="4"/><path d="M5 21v-3a7 7 0 0 1 14 0v3"/>',
+      sparkle:'<path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3ZM20 2v4M18 4h4"/>',
+      vault:'<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+      settings:'<path d="M3 6h18M3 12h18M3 18h18"/><circle cx="8" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="10" cy="18" r="2"/>',
+      edit:'<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14v6Z"/>',
+      image:'<rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="8" r="2"/><path d="m3 17 5-5 4 4 4-6 5 7"/>',
+      sync:'<path d="M20 7a8 8 0 0 0-14-2L3 8m0-5v5h5M4 17a8 8 0 0 0 14 2l3-3m0 5v-5h-5"/>',
+      chat:'<path d="M4 4h16v12H9l-5 4V4Z"/><path d="M8 8h8M8 12h5"/>',
+      more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+      arrow:'<path d="m9 5 7 7-7 7"/>',
+    };
+    return `<svg class="lia-pocket-icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.persona}</svg>`;
+  }
+
+  function renderPocketHeader() {
+    return `<header class="lia-header"><div class="lia-brand-text"><h1 class="lia-brand-title">LIA <span>your persona, gently.</span></h1></div><details class="lia-pocket-menu"><summary aria-label="LIA 메뉴">${pocketIcon('more')}</summary><div class="lia-header-actions"><button id="dpg-persona-panel-toggle" type="button">페르소나 관리</button><button id="dpg-refresh" type="button">새로고침</button><button id="dpg-pocket-width" type="button">화면 넓게 / 작게</button><button id="dpg-close" type="button">LIA 닫기</button></div></details></header>`;
+  }
+
+  async function togglePocketLiveSync(ctx) {
+    const binding = normalizeLivePersonaBinding(ctx.livePersonaBinding);
+    if (!binding) return { needsSetup:true };
+    if (binding.pendingBindingChange) throw new Error('바인딩 변경을 먼저 확인해 주세요.');
+    if (binding.enabled) await disableLivePersonaSyncKeepCurrent(ctx);
+    else await configureLivePersonaSync(ctx, binding.sourcePersonaId ? 'id:' + binding.sourcePersonaId : 'index:' + binding.sourcePersonaIndex, binding.policy, binding.externalChangePolicy);
+    return { skipCapture:true };
+  }
+
+  function syncPocketPersonaDialog(open, moveFocus = true) {
+    const panel = document.querySelector('.lia-persona-panel');
+    for (const selector of ['.lia-workspace', '.lia-pocket-nav', '.lia-header']) {
+      const node = document.querySelector(selector);
+      if (node) node.inert = open;
+    }
+    if (!panel) return;
+    panel.onkeydown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); document.getElementById('dpg-persona-panel-close')?.click(); }
+      if (event.key !== 'Tab') return;
+      const controls = [...panel.querySelectorAll('button:not(:disabled),input:not(:disabled),summary,[tabindex="0"]')].filter(node => node.getClientRects().length);
+      const first = controls[0], last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    if (!moveFocus) return;
+    if (open) document.getElementById('dpg-persona-filter')?.focus();
+    else document.getElementById('lia-pocket-personas')?.focus();
+  }
+
+  function renderPocketHome(ctx, currentTab) {
+    const state = buildPersonaPanelState(ctx);
+    const persona = state.effectivePersona;
+    const binding = normalizeLivePersonaBinding(ctx.livePersonaBinding);
+    const pending = binding ? Math.max(0, collectCompletedTurnPairs(ctx.chat).length - binding.lastProcessedPairCount) : 0;
+    const connected = ['connected','connected_paused'].includes(ctx.livePersonaBindingStatus?.state);
+    const warning = binding?.pendingBindingChange ? '바인딩 변경을 확인해 주세요.' : binding && !connected ? '연결 상태를 확인해 주세요.' : '';
+    const description = String(persona?.note || '').replace(LIVE_PERSONA_NOTE_MARKER, '').trim();
+    return `<section id="lia-pocket-home" class="dpg-tab-panel ${currentTab === 'home' ? 'active' : ''}">
+      <h2 class="lia-pocket-title">지금, 나의 페르소나</h2>
+      <p class="lia-pocket-chat">${pocketIcon('chat')}<span>${htmlEscape(ctx.chat?.name || '현재 채팅')} · ${state.dynamicId ? '채팅 전용' : '기본 페르소나'}</span></p>
+      <div class="lia-pocket-columns"><div>
+        <article class="lia-pocket-profile"><div class="lia-pocket-profile-top"><span class="lia-pocket-badge"><i></i>${state.dynamicId ? '이 채팅에 연결됨' : '기본 페르소나 사용 중'}</span><button type="button" data-pocket-personas aria-label="페르소나 바인딩 관리">${pocketIcon('more')}</button></div>
+          <div class="lia-pocket-person"><div><h3>${htmlEscape(persona?.name || '나의 페르소나')}</h3><p>${htmlEscape(limitText(description || '이 대화에서 함께할 나의 모습',75))}</p></div><div class="lia-pocket-avatar" aria-hidden="true"><svg viewBox="0 0 100 100"><circle cx="50" cy="37" r="19"/><path d="M10 100a40 40 0 0 1 80 0Z"/></svg></div></div>
+          <div class="lia-pocket-profile-actions"><button type="button" data-pocket-tab="edit">${pocketIcon('edit')}초안 편집</button><button id="lia-pocket-personas" type="button" data-pocket-personas>${pocketIcon('persona')}다른 페르소나</button></div>
+        </article>
+        <h3 class="lia-pocket-heading">페르소나 꾸미기</h3>
+        <button class="lia-pocket-row" type="button" data-pocket-tab="assets"><span class="lia-pocket-tile">${pocketIcon('image')}</span><span><strong>이미지와 감정 에셋</strong><small>나의 표정에 어울리는 이미지</small></span>${pocketIcon('arrow')}</button>
+      </div><div>
+        <div class="lia-pocket-heading-row"><h3 class="lia-pocket-heading">대화와 함께 변화해요</h3><button type="button" data-pocket-tab="realtime">상세 보기</button></div>
+        <article class="lia-pocket-card lia-pocket-sync"><div class="lia-pocket-sync-head"><span class="lia-pocket-tile">${pocketIcon('sync')}</span><div><strong>Live Sync</strong><small>5턴마다 상태를 갱신해요</small></div><button id="lia-pocket-sync-toggle" type="button" role="switch" aria-checked="${binding?.enabled === true}" aria-label="Live Sync" ${warning ? 'disabled' : ''}><span></span></button></div>
+          <div class="lia-pocket-progress"><progress max="${LIVE_SYNC_BATCH_SIZE}" value="${binding?.enabled ? Math.min(pending,LIVE_SYNC_BATCH_SIZE) : 0}" aria-label="다음 갱신까지 완료한 대화"></progress><small>${binding?.enabled ? pending >= LIVE_SYNC_BATCH_SIZE ? `${pending}턴 대기 · 분석할 준비가 되었어요` : `${pending} / ${LIVE_SYNC_BATCH_SIZE}턴 · 다음 갱신까지 ${LIVE_SYNC_BATCH_SIZE-pending}턴` : '현재 상태를 유지하고 있어요'}</small></div>
+          ${warning || binding?.lastError ? `<p class="lia-live-error">${htmlEscape(warning || binding.lastError)}</p>` : ''}
+        </article>
+        <div class="lia-pocket-heading-row"><h3 class="lia-pocket-heading">최근 반영된 상태</h3><button type="button" data-pocket-tab="realtime">모두 보기</button></div>
+        <article class="lia-pocket-card"><ul class="lia-pocket-state">${binding?.liveState?.length ? binding.liveState.slice(0,3).map(item=>`<li><span class="lia-pocket-state-dot"></span><div><strong>${htmlEscape(item.value)}</strong><small>${htmlEscape(item.category)}</small></div></li>`).join('') : '<li><div><strong>아직 반영된 변화가 없어요.</strong><small>대화가 쌓이면 이곳에서 확인할 수 있어요.</small></div></li>'}</ul></article>
+      </div></div>
+    </section>`;
+  }
+
   function renderPreview(ctx, options = {}) {
     if (options?.skipCapture !== true) captureGeneratedOutputState();
     const outputText = preservedLLMResultText;
@@ -14398,7 +18405,7 @@ ${revisionText}`);
     const savedVault = asArray(ctx.savedResultVault);
     const outputJson = llmResult ? resultToOutputText(llmResult) : "";
     const firstMessage = getFirstMessageText(ctx);
-    const currentTab = ["generate", "edit", "realtime", "assets", "vault", "settings", "server"].includes(activeWorkspaceTab) ? activeWorkspaceTab : "generate";
+    const currentTab = ["home", "generate", "edit", "realtime", "assets", "vault", "settings", "server"].includes(activeWorkspaceTab) ? activeWorkspaceTab : "generate";
     if (!["persona", "prompt", "evolution", "audit", "history"].includes(preservedEditorSection)) preservedEditorSection = "persona";
     const charName = String(ctx.char?.name || "(unknown)");
     const chatName = String(ctx.chat?.name || `#${ctx.chatIndex + 1}`);
@@ -14416,7 +18423,7 @@ ${revisionText}`);
     const safeCurrentSaveState = safeEditableCurrentPersonaSnapshot(ctx);
     const safeCurrentSaveLabel = safeCurrentSaveState.safe ? (safeCurrentSaveState.dynamicPersona?.name || safeCurrentSaveState.dynamicId) : "기본 Persona 직접 덮어쓰기 차단";
     const liveBindingStatus = ctx.livePersonaBindingStatus || null;
-    const liveBindingStateLabel = !livePersonaBinding ? "미설정" : liveBindingStatus?.state === "connected" ? "정상 연결" : liveBindingStatus?.state === "connected_paused" ? "연결됨 · 동기화 OFF" : liveBindingStatus?.state === "external_change" ? "RisuAI에서 변경됨" : liveBindingStatus?.state === "live_missing" ? "Live Persona 없음" : liveBindingStatus?.state === "unavailable" ? "바인딩 API 사용 불가" : "확인 필요";
+    const liveBindingStateLabel = !livePersonaBinding ? "미설정" : liveBindingStatus?.state === "binding_change_pending" ? "바인딩 변경 미완료 · 다시 확인 필요" : liveBindingStatus?.state === "connected" ? "정상 연결" : liveBindingStatus?.state === "connected_paused" ? "연결됨 · 동기화 OFF" : liveBindingStatus?.state === "external_change" ? "RisuAI에서 변경됨" : liveBindingStatus?.state === "live_missing" ? "Live Persona 없음" : liveBindingStatus?.state === "unavailable" ? "바인딩 API 사용 불가" : "확인 필요";
     const previousBindingId = String(livePersonaBinding?.previousBinding?.personaId || "").trim();
     const previousBindingPersona = previousBindingId ? asArray(ctx.db?.personas).find((item) => String(item?.id || "") === previousBindingId) : null;
     const previousBindingLabel = livePersonaBinding?.previousBinding?.hadExplicitBinding ? (previousBindingPersona?.name || previousBindingId || "삭제된 Persona") : "채팅 전용 바인딩 없음";
@@ -14432,34 +18439,22 @@ ${revisionText}`);
     const personaSidePanel = renderPersonaSidePanel(ctx);
 
     return `
-      <div class="lia-app-layout ${preservedSidebarCollapsed ? "sidebar-collapsed" : ""} ${preservedWorldDrawerOpen ? "world-drawer-open" : ""} ${preservedPersonaPanelOpen ? "persona-panel-open" : ""}" data-page="${htmlEscape(currentTab)}">
-        <aside class="lia-sidebar" aria-label="LIA 주요 기능">
-          <div class="lia-sidebar-top">
-            <button id="dpg-sidebar-collapse" class="lia-sidebar-collapse" type="button" title="사이드바 접기/펼치기">‹</button>
-            <nav class="lia-sidebar-nav">
-              <button id="dpg-tab-generate" class="dpg-tab-button ${currentTab === "generate" ? "active" : ""}" type="button" data-workspace-tab="generate" aria-label="생성" title="생성"><span class="lia-nav-icon" data-compact-label="생성">✦</span><span class="lia-nav-label">생성</span></button>
-              <button id="dpg-tab-edit" class="dpg-tab-button ${currentTab === "edit" ? "active" : ""}" type="button" data-workspace-tab="edit" aria-label="편집" title="편집"><span class="lia-nav-icon" data-compact-label="편집">◇</span><span class="lia-nav-label">편집</span></button>
-              <button id="dpg-tab-realtime" class="dpg-tab-button ${currentTab === "realtime" ? "active" : ""}" type="button" data-workspace-tab="realtime" aria-label="실시간 동기화" title="실시간 동기화"><span class="lia-nav-icon" data-compact-label="동기화">↻</span><span class="lia-nav-label">실시간</span></button>
-              <button id="dpg-tab-assets" class="dpg-tab-button ${currentTab === "assets" ? "active" : ""}" type="button" data-workspace-tab="assets" aria-label="감정 에셋" title="감정 에셋"><span class="lia-nav-icon" data-compact-label="에셋">🖼</span><span class="lia-nav-label">에셋</span></button>
-              <button id="dpg-tab-vault" class="dpg-tab-button ${currentTab === "vault" ? "active" : ""}" type="button" data-workspace-tab="vault" aria-label="보관함" title="보관함"><span class="lia-nav-icon" data-compact-label="보관">▣</span><span class="lia-nav-label">보관함</span></button>
-              <button id="dpg-tab-settings" class="dpg-tab-button ${currentTab === "settings" ? "active" : ""}" type="button" data-workspace-tab="settings" aria-label="AI 연결" title="AI 연결"><span class="lia-nav-icon" data-compact-label="AI">⚙</span><span class="lia-nav-label">AI 연결</span></button>
-              <button id="dpg-tab-server" class="dpg-tab-button ${currentTab === "server" ? "active" : ""}" type="button" data-workspace-tab="server" aria-label="서버 연결" title="서버 연결"><span class="lia-nav-icon" data-compact-label="서버">⇄</span><span class="lia-nav-label">서버 연결</span></button>
-            </nav>
-          </div>
-          <div class="lia-sidebar-current">
-            <span class="lia-sidebar-caption">현재 작업</span>
-            ${llmResult?.personaPrompt ? `<strong>${htmlEscape(resultName || "LIA Persona")}</strong><small>${htmlEscape([personaSpec?.speciesRace, personaSpec?.gender, personaSpec?.role].filter(Boolean).join(" · ") || generationModeLabel(generationMode))}</small><div class="lia-sidebar-work-meta"><span>${personaLineage ? `Rev.${personaLineage.revision}` : "Draft"}</span><span>${preservedPersonaAudit ? `Audit ${preservedPersonaAudit.score}` : "Audit -"}</span><span>${PERSONA_VARIANT_PROFILES[activePersonaProfile].label}</span></div>` : `<strong>열린 Persona 없음</strong><small>생성하거나 보관함에서 불러오세요.</small>`}
-          </div>
-          <div class="lia-sidebar-provider" title="현재 AI 연결"><span>AI</span><b>${htmlEscape(providerSummary)}</b></div>
-        </aside>
+      <div class="lia-app-layout ${preservedSidebarCollapsed ? "sidebar-collapsed" : ""} ${preservedWorldDrawerOpen ? "world-drawer-open" : ""} ${preservedPersonaPanelOpen ? "persona-panel-open" : ""}" data-page="${htmlEscape(currentTab)}" data-pocket-group="${pocketPrimaryTab(currentTab)}">
+        <nav class="lia-pocket-nav" aria-label="LIA 주요 기능">
+          ${[["home", "내 페르소나", "persona"], ["generate", "만들기", "sparkle"], ["vault", "보관함", "vault"], ["settings", "설정", "settings"]].map(([tab, label, icon]) => `<button id="dpg-tab-${tab}" type="button" data-pocket-tab="${tab}" class="${pocketPrimaryTab(currentTab) === tab ? "active" : ""}" aria-current="${pocketPrimaryTab(currentTab) === tab ? "page" : "false"}">${pocketIcon(icon)}<span>${label}</span></button>`).join("")}
+        </nav>
         <main class="lia-workspace">
+          <nav class="lia-pocket-subnav" aria-label="상세 기능">
+            ${[["home", "개요"], ["edit", "초안 편집"], ["realtime", "Live Sync"], ["assets", "이미지·감정 에셋"], ["settings", "AI 연결"], ["server", "저장·서버"]].map(([tab,label]) => `<button type="button" class="dpg-tab-button ${currentTab === tab ? "active" : ""}" data-workspace-tab="${tab}" data-pocket-group="${pocketPrimaryTab(tab)}" aria-current="${currentTab === tab ? "page" : "false"}">${label}</button>`).join("")}
+          </nav>
+          ${renderPocketHome(ctx, currentTab)}
       <section id="dpg-studio-panel" class="dpg-tab-panel ${["generate", "edit", "realtime"].includes(currentTab) ? "active" : ""}" data-workspace-panel="studio">
         <section class="lia-mode-stage">
           <div class="lia-section-eyebrow">GENERATION MODE</div>
           <div class="lia-mode-head">
             <div>
-              <h2>어떤 방식으로 페르소나를 만들까요?</h2>
-              <p>기존 인물을 세계관에 맞게 다시 해석하거나, 로어만 바탕으로 완전히 새로운 인물을 만듭니다.</p>
+              <h2>새로운 나를 만나요</h2>
+              <p>어떤 이야기에서 시작할까요?</p>
             </div>
           </div>
           <select id="dpg-generation-mode" class="lia-visually-hidden" aria-label="생성 모드">
@@ -14470,16 +18465,16 @@ ${revisionText}`);
           </select>
           <div class="lia-mode-grid lia-mode-grid-four">
             <button class="lia-mode-card ${generationMode === GENERATION_MODE_CLASSIC ? "active" : ""}" type="button" data-generation-mode-card="classic">
-              <span class="lia-mode-symbol">C</span><span class="lia-mode-copy"><strong>클래식 생성</strong><small>기존 Source Persona를 현재 세계에 맞게 재해석</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_CLASSIC ? "선택됨" : "선택"}</span>
+              <span class="lia-mode-symbol">${pocketIcon("persona")}</span><span class="lia-mode-copy"><strong>클래식 생성</strong><small>기존 Source Persona를 현재 세계에 맞게 재해석</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_CLASSIC ? "선택됨" : "선택"}</span>
             </button>
             <button class="lia-mode-card random ${generationMode === GENERATION_MODE_RANDOM ? "active" : ""}" type="button" data-generation-mode-card="random">
-              <span class="lia-mode-symbol">R</span><span class="lia-mode-copy"><strong>랜덤 신규 생성</strong><small>세계관 안에서 완전히 새로운 인물을 창작</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_RANDOM ? "선택됨" : "선택"}</span>
+              <span class="lia-mode-symbol">${pocketIcon("sparkle")}</span><span class="lia-mode-copy"><strong>랜덤 신규 생성</strong><small>세계관 안에서 완전히 새로운 인물을 창작</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_RANDOM ? "선택됨" : "선택"}</span>
             </button>
             <button class="lia-mode-card ${generationMode === GENERATION_MODE_CHARACTER ? "active" : ""}" type="button" data-generation-mode-card="character">
-              <span class="lia-mode-symbol">◎</span><span class="lia-mode-copy"><strong>등장인물 추출</strong><small>단일 캐릭터·거대 시뮬봇에서 인물을 분리해 User Persona로 변환</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_CHARACTER ? "선택됨" : "선택"}</span>
+              <span class="lia-mode-symbol">${pocketIcon("vault")}</span><span class="lia-mode-copy"><strong>등장인물 추출</strong><small>단일 캐릭터·거대 시뮬봇에서 인물을 분리해 User Persona로 변환</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_CHARACTER ? "선택됨" : "선택"}</span>
             </button>
             <button class="lia-mode-card ${generationMode === GENERATION_MODE_CONVERSATION ? "active" : ""}" type="button" data-generation-mode-card="conversation">
-              <span class="lia-mode-symbol">Q</span><span class="lia-mode-copy"><strong>대화에서 추출</strong><small>현재 채팅의 사용자 작성 메시지만 분석해 실제 플레이 Persona를 추출</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_CONVERSATION ? "선택됨" : "선택"}</span>
+              <span class="lia-mode-symbol">${pocketIcon("chat")}</span><span class="lia-mode-copy"><strong>대화에서 추출</strong><small>현재 채팅의 사용자 작성 메시지만 분석해 실제 플레이 Persona를 추출</small></span><span class="lia-mode-check">${generationMode === GENERATION_MODE_CONVERSATION ? "선택됨" : "선택"}</span>
             </button>
           </div>
         </section>
@@ -14497,6 +18492,13 @@ ${revisionText}`);
               <div class="lia-panel-title">
                 <div><span class="lia-kicker">WORLD SOURCE</span><h2>생성 기준</h2></div>
                 <span>${htmlEscape(charName)}</span>
+              </div>
+              <div class="lia-field lia-field-full">
+                <label for="dpg-max-lore-chars">자료 항목별 최대 문자 수</label>
+                <input id="dpg-max-lore-chars" name="max_lore_chars" type="number" min="240" max="3000" step="1" value="${ctx.maxChars}">
+                <small>캐릭터·모듈 설명과 로어 수집에 적용합니다. 범위 240~3000자. RisuAI ARG와 같은 값을 사용합니다.</small>
+                <button id="dpg-save-lore-limit" class="btn-soft" type="button">자료 길이 설정 저장</button>
+                <div id="dpg-lore-limit-status" role="status" aria-live="polite">현재 적용값: ${ctx.maxChars}자</div>
               </div>
               <div class="lia-context-hero">
                 <strong>${htmlEscape(charName)}</strong>
@@ -14669,18 +18671,18 @@ ${revisionText}`);
               </details>
             </section>
 
-              <section class="lia-page-hero lia-realtime-hero"><span class="lia-section-eyebrow">REALTIME PERSONA</span><h2>실시간 Persona</h2><p>채팅별 Live Persona 바인딩과 5턴 자동 갱신 상태를 관리합니다.</p></section>
+              <section class="lia-page-hero lia-realtime-hero"><span class="lia-section-eyebrow">REALTIME PERSONA</span><h2>대화와 함께 변화해요</h2><p>현재 채팅의 자동 갱신과 변화를 관리해요.</p></section>
               <section class="lia-live-sync-panel lia-live-sync-standalone ${livePersonaBinding?.enabled ? "live-on" : livePersonaBinding ? "live-paused" : ""}">
                 <div class="lia-audit-head">
-                  <div><span class="lia-kicker">LIVE PERSONA SYNC</span><h3>5턴 실시간 Persona</h3><p>Persona Binding Manager가 이 채팅을 전용 Live Persona에 연결하고 정확히 U+A 5턴마다 상태를 갱신합니다. 원본 Persona와 이전 RisuAI 바인딩은 보존됩니다.</p></div>
+                  <div><span class="lia-kicker">LIVE PERSONA SYNC</span><h3>Live Sync</h3><p>사용자와 AI의 대화 5쌍마다 갱신해요. 원본 페르소나는 그대로 보존됩니다.</p></div>
                   <strong>${livePersonaBinding?.enabled ? "ON" : livePersonaBinding ? "OFF" : "미설정"}</strong>
                 </div>
-                <div class="lia-live-config-grid">
+                <details class="lia-pocket-fold"><summary>갱신 방식 설정<span>원본 페르소나 · 반영 정책</span></summary><div class="lia-live-config-grid">
                   <label class="lia-field"><span>이 채팅의 원본 Persona</span><select id="dpg-live-persona-select"${livePersonaBinding?.enabled ? " disabled" : ""}>${renderLivePersonaOptions(ctx, livePersonaBinding)}</select></label>
                   <label class="lia-field"><span>자동 반영 정책</span><select id="dpg-live-policy"><option value="conservative"${livePersonaBinding?.policy !== "auto" ? " selected" : ""}>보수적 · 현재 상태만 자동 갱신</option><option value="auto"${livePersonaBinding?.policy === "auto" ? " selected" : ""}>자동 · 반복 검증된 변화도 승격</option></select></label>
                   <label class="lia-field"><span>RisuAI에서 Persona를 바꿨을 때</span><select id="dpg-live-binding-policy"><option value="safe"${livePersonaBinding?.externalChangePolicy !== "follow" ? " selected" : ""}>안전 · Live Sync 중지</option><option value="follow"${livePersonaBinding?.externalChangePolicy === "follow" ? " selected" : ""}>따라가기 · 새 Source로 Live Persona 재생성</option></select></label>
                 </div>
-                <div class="lia-live-status-grid">
+                </details><details class="lia-pocket-fold"><summary>연결 상태 자세히 보기<span>현재·이전 바인딩 확인</span></summary><div class="lia-live-status-grid">
                   <div><b>Live Persona</b><span>${htmlEscape(livePersonaBinding?.livePersonaName || "아직 없음")}</span></div>
                   <div><b>RisuAI 바인딩</b><span>${htmlEscape(liveBindingStateLabel)}</span></div>
                   <div><b>현재 RisuAI Persona</b><span>${htmlEscape(liveBindingStatus?.effectivePersonaName || liveBindingStatus?.personaId || "채팅 전용 바인딩 없음")}</span></div>
@@ -14690,6 +18692,7 @@ ${revisionText}`);
                   <div><b>최근 분석</b><span>${liveLastLedger ? `TURN ${liveLastLedger.startPair}~${liveLastLedger.endPair}` : "아직 없음"}</span></div>
                   <div><b>Binding Manager</b><span>v${PERSONA_BINDING_MANAGER_VERSION} · ${livePersonaBinding?.externalChangePolicy === "follow" ? "따라가기" : "안전"}</span></div>
                 </div>
+                </details>
                 ${livePersonaBinding?.legacyNativeMirrorWarning ? `<p class="lia-live-error">이전 LIA 버전에서 RisuAI 기본 Persona 인덱스를 직접 변경한 기록일 수 있습니다. RisuAI Persona 설정에서 원하는 기본 Persona를 한 번 직접 선택해 편집 상태를 재동기화해 주세요.</p>` : ""}${livePersonaBinding?.lastError ? `<p class="lia-live-error">${htmlEscape(livePersonaBinding.lastError)}</p>` : ""}
                 <div class="lia-live-actions">
                   <button id="dpg-live-enable" class="btn-primary" type="button">${livePersonaBinding?.enabled ? "정책 저장" : livePersonaBinding ? "실시간 동기화 다시 켜기" : "실시간 동기화 켜기"}</button>
@@ -14697,20 +18700,20 @@ ${revisionText}`);
                   <button id="dpg-live-disable" class="btn-soft" type="button"${livePersonaBinding?.enabled ? "" : " disabled"}>현재 상태 유지하고 끄기</button>
                   <button id="dpg-live-restore" class="btn-danger" type="button"${livePersonaBinding ? "" : " disabled"}>이전 RisuAI 바인딩 복원</button>
                 </div>
-                ${livePersonaBinding ? `<div class="lia-live-state-columns"><div><h4>현재 Live State</h4>${livePersonaBinding.liveState.length ? `<ul>${livePersonaBinding.liveState.map((item) => `<li><b>${htmlEscape(item.category)}</b><span>${htmlEscape(item.value)}</span></li>`).join("")}</ul>` : `<p>현재 상태 항목 없음</p>`}</div><div><h4>Persistent Evolution</h4>${livePersonaBinding.coreOverlay.length ? `<ul>${livePersonaBinding.coreOverlay.map((item) => `<li><b>${htmlEscape(item.field)}</b><span>${htmlEscape(item.value)}</span></li>`).join("")}</ul>` : `<p>${livePersonaBinding.policy === "auto" ? "두 번 이상 연속 확인된 고신뢰 변화만 자동 승격됩니다." : "보수적 모드에서는 자동 승격하지 않습니다."}</p>`}</div></div>` : ""}
-                <details class="lia-inline-fold lia-live-ledger-fold"><summary>5턴 Delta Ledger <span>${livePersonaBinding?.ledgers?.length || 0}개 기록</span></summary>${livePersonaBinding?.ledgers?.length ? `<div class="lia-live-ledger-list">${livePersonaBinding.ledgers.slice(-8).reverse().map((item) => `<div><b>TURN ${item.startPair}~${item.endPair}</b><span>${htmlEscape(item.summary || "분석 완료")}</span></div>`).join("")}</div>` : `<p class="lia-candidate-empty">아직 분석 기록이 없습니다.</p>`}</details>
+                ${livePersonaBinding ? `<div class="lia-live-state-columns"><div><h4>현재 반영된 상태</h4>${livePersonaBinding.liveState.length ? `<ul>${livePersonaBinding.liveState.map((item) => `<li><b>${htmlEscape(item.category)}</b><span>${htmlEscape(item.value)}</span></li>`).join("")}</ul>` : `<p>현재 상태 항목 없음</p>`}</div><div><h4>꾸준히 이어진 변화</h4>${livePersonaBinding.coreOverlay.length ? `<ul>${livePersonaBinding.coreOverlay.map((item) => `<li><b>${htmlEscape(item.field)}</b><span>${htmlEscape(item.value)}</span></li>`).join("")}</ul>` : `<p>${livePersonaBinding.policy === "auto" ? "두 번 이상 연속 확인된 고신뢰 변화만 자동 승격됩니다." : "보수적 모드에서는 자동 승격하지 않습니다."}</p>`}</div></div>` : ""}
+                <details class="lia-inline-fold lia-live-ledger-fold"><summary>대화별 갱신 기록 <span>${livePersonaBinding?.ledgers?.length || 0}개 기록</span></summary>${livePersonaBinding?.ledgers?.length ? `<div class="lia-live-ledger-list">${livePersonaBinding.ledgers.slice(-8).reverse().map((item) => `<div><b>TURN ${item.startPair}~${item.endPair}</b><span>${htmlEscape(item.summary || "분석 완료")}</span></div>`).join("")}</div>` : `<p class="lia-candidate-empty">아직 분석 기록이 없습니다.</p>`}</details>
               </section>
 
             <section class="lia-panel lia-result-card ${llmResult?.personaPrompt ? "has-result" : "is-empty"}" data-editor-section="${htmlEscape(preservedEditorSection)}">
               <div class="lia-panel-title">
-                <div><span class="lia-kicker">RESULT</span><h2>생성된 페르소나</h2></div>
+                <div><span class="lia-kicker">RESULT</span><h2>페르소나 다듬기</h2></div>
                 <span>${resultName ? htmlEscape(resultName) : "아직 생성되지 않음"}</span>
               </div>
               ${llmResult?.personaPrompt ? `<nav class="lia-editor-tabs" aria-label="편집 섹션">
-                <button type="button" class="lia-editor-tab ${preservedEditorSection === "persona" ? "active" : ""}" data-editor-section="persona">PersonaSpec</button>
-                <button type="button" class="lia-editor-tab ${preservedEditorSection === "prompt" ? "active" : ""}" data-editor-section="prompt">Prompt</button>
-                <button type="button" class="lia-editor-tab ${preservedEditorSection === "evolution" ? "active" : ""}" data-editor-section="evolution">Evolution</button>
-                <button type="button" class="lia-editor-tab ${preservedEditorSection === "audit" ? "active" : ""}" data-editor-section="audit">Audit</button>
+                <button type="button" class="lia-editor-tab ${preservedEditorSection === "persona" ? "active" : ""}" data-editor-section="persona">프로필</button>
+                <button type="button" class="lia-editor-tab ${preservedEditorSection === "prompt" ? "active" : ""}" data-editor-section="prompt">본문</button>
+                <button type="button" class="lia-editor-tab ${preservedEditorSection === "evolution" ? "active" : ""}" data-editor-section="evolution">변화</button>
+                <button type="button" class="lia-editor-tab ${preservedEditorSection === "audit" ? "active" : ""}" data-editor-section="audit">검토</button>
                 <button type="button" class="lia-editor-tab ${preservedEditorSection === "history" ? "active" : ""}" data-editor-section="history">버전 기록</button>
               </nav>` : ""}
 
@@ -14718,10 +18721,10 @@ ${revisionText}`);
               <div class="lia-empty-result">
                 <div class="lia-empty-orb">✦</div>
                 <strong>아직 생성 결과가 없습니다.</strong>
-                <p>위에서 생성하면 완성된 Persona Slot을 여기에서 바로 확인하고 저장할 수 있습니다.</p>
+                <p>만들기에서 생성하거나 보관함에서 페르소나를 열어 주세요.</p>
               </div>` : ""}
 
-              <div class="lia-result-toolbar">
+              <details class="lia-pocket-fold"><summary>이름과 번역<span>저장할 이름 · 다른 언어로 번역</span></summary><div class="lia-result-toolbar">
                 <label class="lia-field lia-persona-save-name">
                   <span>채택할 페르소나명</span>
                   <input id="dpg-generated-persona-name" type="text" value="${htmlEscape(preservedGeneratedPersonaNameText)}" placeholder="${isIndependentGeneration(ctx, llmResult || { generationMode }) ? `생성 이름 사용: ${htmlEscape(llmResult?.personaName || (generationMode === GENERATION_MODE_CHARACTER ? (selectedCharacterCandidate()?.name || "선택 인물") : "자동"))}` : `생성/원본 이름 사용: ${htmlEscape(llmResult?.personaName || persona.name || "User")}`}">
@@ -14740,14 +18743,15 @@ ${revisionText}`);
                 </div>
               </div>
 
-              ${llmResult?.personaPrompt ? `<section class="lia-edit-save-panel">
-                <div class="lia-edit-save-copy"><span class="lia-kicker">SAVE PERSONA</span><strong>편집 결과 저장</strong><small>현재 채팅에 동적 바인딩된 Persona가 RisuAI 기본 Persona와 다를 때만 안전하게 덮어쓸 수 있습니다. RisuAI 기본 Persona 자체는 native 편집 상태 보호를 위해 LIA에서 직접 덮어쓰지 않습니다.</small></div>
+              </details>
+              ${llmResult?.personaPrompt ? `<details class="lia-edit-save-panel lia-pocket-fold"><summary>저장하기<span>현재 페르소나 · 새 페르소나 · 보관함</span></summary>
+                <div class="lia-edit-save-copy"><span class="lia-kicker">SAVE PERSONA</span><strong>편집 결과 저장</strong><small>현재 채팅 전용 페르소나에 저장하거나 새로 만들 수 있어요. RisuAI 기본 페르소나는 덮어쓰지 않아요.</small></div>
                 <div class="lia-edit-save-actions">
                   <button id="dpg-save-current-persona" class="btn-primary" type="button"${safeCurrentSaveState.safe ? "" : " disabled"}>현재 Persona에 저장<small>${htmlEscape(safeCurrentSaveLabel)}</small></button>
                   <button id="dpg-save-new-persona" class="btn-soft" type="button">새로운 Persona로 저장<small>기존 Persona 보존</small></button>
                   <button id="dpg-edit-vault-save" class="btn-soft" type="button">LIA 보관함에 보관<small>PersonaSpec · Audit · Revision 포함</small></button>
                 </div>
-              </section>` : ""}
+              </details>` : ""}
 
               ${personaSpec ? `
               <section class="lia-compiler-panel" data-editor-block="prompt">
@@ -14807,23 +18811,23 @@ ${revisionText}`);
 
               ${personaSpec ? `
               <details class="lia-inline-fold lia-spec-fold" data-editor-block="persona" open>
-                <summary>PersonaSpec 워크숍 <span>필드 잠금 · 부분 리롤 · 정본 확인</span></summary>
+                <summary>프로필 살펴보기 <span>항목을 눌러 자세히 편집</span></summary>
                 <div class="lia-spec-workshop-head">
-                  <div><b>${currentPersonaFieldLocks().length}개 필드 잠금</b><span>잠긴 값은 부분 리롤에서 절대 변경하지 않습니다.</span></div>
+                  <div><b>${currentPersonaFieldLocks().length}개 항목 잠금</b><span>유지하고 싶은 항목은 잠가 주세요.</span></div>
                   <div class="lia-spec-workshop-actions">
-                    <button id="dpg-reroll-unlocked" class="btn-soft" type="button"${currentPersonaFieldLocks().length >= PERSONA_SPEC_FIELD_KEYS.length ? " disabled" : ""}>잠금 제외 전체 리롤</button>
-                    <button class="btn-soft lia-run-persona-audit" type="button">Persona Audit</button>
+                    <button id="dpg-reroll-unlocked" class="btn-soft" type="button"${currentPersonaFieldLocks().length >= PERSONA_SPEC_FIELD_KEYS.length ? " disabled" : ""}>잠기지 않은 항목 다시 만들기</button>
+                    <button class="btn-soft lia-run-persona-audit" type="button">프로필 검토</button>
                   </div>
                 </div>
                 <div class="lia-spec-field-grid">
                   ${PERSONA_SPEC_FIELD_DEFS.map((def) => {
                     const locked = preservedPersonaFieldLocks.has(def.key);
                     const value = personaSpecFieldText(personaSpec, def.key);
-                    return `<article class="lia-spec-field-card ${locked ? "locked" : ""}">
+                    return `<details class="lia-spec-field-card lia-pocket-fold ${locked ? "locked" : ""}"><summary><strong>${htmlEscape(def.label)}</strong><span>${htmlEscape(limitText(value || "아직 작성하지 않았어요",60))}</span></summary><div>
                       <header><b>${htmlEscape(def.label)}</b><label><input class="lia-spec-lock" data-spec-field="${htmlEscape(def.key)}" type="checkbox"${locked ? " checked" : ""}> 잠금</label></header>
                       <p>${htmlEscape(value || "(비어 있음)")}</p>
                       <button class="btn-soft lia-spec-reroll" data-spec-reroll="${htmlEscape(def.key)}" type="button"${locked ? " disabled" : ""}>이 항목 다시 생성</button>
-                    </article>`;
+                    </div></details>`;
                   }).join("")}
                 </div>
                 <details class="lia-inline-fold lia-spec-json-fold">
@@ -14895,33 +18899,31 @@ ${revisionText}`);
       </section>
 
       <section id="dpg-vault-panel" class="dpg-tab-panel ${currentTab === "vault" ? "active" : ""}" data-workspace-panel="vault">
-        <section class="lia-page-hero"><span class="lia-section-eyebrow">PERSONA LIBRARY</span><h2>보관함</h2><p>생성 결과와 PersonaSpec, World Blueprint, Audit, Revision을 한 곳에서 관리합니다.</p></section>
+        <section class="lia-page-hero"><span class="lia-section-eyebrow">PERSONA LIBRARY</span><h2>나의 보관함</h2><p>다시 만나고 싶은 페르소나들.</p></section>
         <section class="lia-panel lia-vault-page">
-          <div class="lia-vault-page-toolbar">
+          ${renderVaultCards(savedVault)}
+          <details class="lia-pocket-fold lia-vault-tools"><summary>선택한 페르소나 관리<span>편집 · 저장 · 삭제</span></summary><div class="lia-vault-page-toolbar">
             <label class="lia-field"><span>선택한 결과</span><select id="dpg-result-vault">${renderVaultOptions(savedVault)}</select></label>
             <div class="lia-vault-actions"><button id="dpg-vault-save" class="btn-soft" type="button">현재 결과 보관</button><button id="dpg-vault-load" class="btn-primary" type="button">편집에서 열기</button><button id="dpg-vault-persona" class="btn-soft" type="button">RisuAI Persona 저장</button><button id="dpg-vault-delete" class="btn-danger" type="button">삭제</button></div>
           </div>
-          ${renderVaultCards(savedVault)}
+          </details>
+          <button class="lia-pocket-new btn-soft" type="button" data-pocket-tab="generate">＋ 새 페르소나 만들기</button>
         </section>
       </section>
 
-      <section id="dpg-server-panel" class="dpg-tab-panel ${currentTab === "server" ? "active" : ""}" data-workspace-panel="server"><div id="liaMemorySuiteServerConnectionPanel"></div></section>
+      <section id="dpg-server-panel" class="dpg-tab-panel ${currentTab === "server" ? "active" : ""}" data-workspace-panel="server"><div id="liaMemorySuiteServerConnectionPanel"><section class="lia-panel"><strong>저장 및 연산 설정을 불러오는 중…</strong></section></div></section>
 
       <section id="dpg-settings-panel" class="dpg-tab-panel ${currentTab === "settings" ? "active" : ""}" data-workspace-panel="settings">
-        <section class="lia-settings-hero">
-          <span class="lia-section-eyebrow">AI CONNECTION</span>
-          <h2>생성에 사용할 AI를 연결합니다.</h2>
-          <p>GRADIA 계열 provider core를 사용합니다. 추론 프리셋은 실제 effort/budget/thinking 값에 즉시 반영되며, Service Tier와 Vertex Flex는 별도 서비스 설정에서 관리합니다.</p>
-        </section>
-        <section class="lia-panel lia-provider-panel">
-          ${renderProviderSettings(savedLLMConfig)}
-        </section>
-        <section class="lia-panel lia-provider-panel">
-          ${renderIllustrationProviderSettings(ctx.savedIllustrationConfig || {})}
-        </section>
-        <section class="lia-panel lia-log-panel">
-          ${renderLogDiagnosticsPanel()}
-        </section>
+        <section class="lia-page-hero"><h2>나에게 맞게, 설정</h2><p>연결과 갱신 방식을 한곳에서 관리해요.</p></section>
+        <div class="lia-pocket-settings-profile"><span class="lia-pocket-tile">L</span><div><strong>LIA Persona Studio</strong><small>나의 페르소나를 위한 작은 작업실</small></div></div>
+        <h3 class="lia-pocket-heading">연결</h3>
+        <details class="lia-pocket-fold lia-settings-fold"><summary>${pocketIcon('sparkle')}<span><strong>AI 연결</strong><small>${htmlEscape(providerSummary)}</small></span></summary><section class="lia-panel lia-provider-panel">${renderProviderSettings(savedLLMConfig)}</section></details>
+        <details class="lia-pocket-fold lia-settings-fold"><summary>${pocketIcon('image')}<span><strong>이미지 생성 AI</strong><small>기본 이미지와 표정을 만들어요</small></span></summary><section class="lia-panel lia-provider-panel">${renderIllustrationProviderSettings(ctx.savedIllustrationConfig || {})}</section></details>
+        <button class="lia-pocket-row" data-pocket-tab="server" type="button"><span class="lia-pocket-tile">${pocketIcon('vault')}</span><span><strong>Memory Suite 서버</strong><small>저장 위치와 연산 연결</small></span>${pocketIcon('arrow')}</button>
+        <h3 class="lia-pocket-heading">대화와 갱신</h3>
+        <button class="lia-pocket-row" data-pocket-tab="realtime" type="button"><span class="lia-pocket-tile">${pocketIcon('sync')}</span><span><strong>갱신 정책과 바인딩 보호</strong><small>상태 반영 · 페르소나 변경 시 동작</small></span>${pocketIcon('arrow')}</button>
+        <h3 class="lia-pocket-heading">도움과 진단</h3>
+        <details class="lia-pocket-fold lia-settings-fold"><summary>${pocketIcon('settings')}<span><strong>작업 기록과 진단</strong><small>문제가 생겼을 때 확인해요</small></span></summary><section class="lia-panel lia-log-panel">${renderLogDiagnosticsPanel()}</section></details>
       </section>
         </main>
         ${personaSidePanel}
@@ -15033,15 +19035,17 @@ ${revisionText}`);
     });
   }
 
-  async function readStoredIllustrationConfig() {
+  async function readStoredIllustrationConfig(force = false) {
+    if (!force && cachedIllustrationConfig) return normalizeIllustrationConfig(cachedIllustrationConfig);
     try {
       const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
       const raw = storage?.getItem ? await storage.getItem(ILLUSTRATION_CONFIG_STORAGE_KEY) : null;
       const parsed = typeof raw === "string" ? JSON.parse(raw) : (raw || {});
-      return normalizeIllustrationConfig(parsed);
+      cachedIllustrationConfig = normalizeIllustrationConfig(parsed);
     } catch (_) {
       return normalizeIllustrationConfig();
     }
+    return normalizeIllustrationConfig(cachedIllustrationConfig);
   }
 
   async function writeStoredIllustrationConfig(config) {
@@ -15055,6 +19059,7 @@ ${revisionText}`);
     if (readback.provider !== normalized.provider || readback.model !== normalized.model || readback.apiKey !== normalized.apiKey) {
       throw new Error("삽화 Provider 설정 pluginStorage readback 검증에 실패했습니다.");
     }
+    cachedIllustrationConfig = readback;
     return normalized;
   }
 
@@ -15543,12 +19548,15 @@ ${revisionText}`);
     };
   }
 
-  async function readPersonaVisualAssetStore() {
+  async function readPersonaVisualAssetStore(force = false) {
+    if (!force && cachedPersonaVisualAssetStoreEmpty === true) return normalizePersonaVisualAssetStore();
     try {
       const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
       const raw = storage?.getItem ? await storage.getItem(PERSONA_VISUAL_ASSET_STORAGE_KEY) : null;
       const parsed = typeof raw === "string" ? JSON.parse(raw) : (raw || {});
-      return normalizePersonaVisualAssetStore(parsed);
+      const normalized = normalizePersonaVisualAssetStore(parsed);
+      cachedPersonaVisualAssetStoreEmpty = Object.keys(normalized.sets || {}).length === 0;
+      return normalized;
     } catch (_) {
       return normalizePersonaVisualAssetStore();
     }
@@ -15559,6 +19567,7 @@ ${revisionText}`);
     const storage = await waitForPluginStorage(getRuntimeApi(), { timeoutMs: 4000, intervalMs: 250 });
     if (!storage?.setItem) throw new Error("RisuAI pluginStorage가 아직 준비되지 않았습니다.");
     await storage.setItem(PERSONA_VISUAL_ASSET_STORAGE_KEY, JSON.stringify(normalized));
+    cachedPersonaVisualAssetStoreEmpty = Object.keys(normalized.sets || {}).length === 0;
     return normalized;
   }
 
@@ -17906,8 +21915,11 @@ ${revisionText}`);
   }
 
   async function hydrateVisualAssetThumbnails() {
-    const nodes = Array.from(document.querySelectorAll("[data-visual-asset-path]"));
-    for (const node of nodes) {
+    const nodes = Array.from(document.querySelectorAll("[data-visual-asset-path]")).filter((node) => node.dataset.loaded !== "1");
+    let cursor = 0;
+    const hydrateNext = async () => {
+      while (cursor < nodes.length) {
+        const node = nodes[cursor++];
       if (node.dataset.loaded === "1") continue;
       const assetPath = String(node.getAttribute("data-visual-asset-path") || "").trim();
       const mime = String(node.getAttribute("data-visual-asset-mime") || "image/png").trim() || "image/png";
@@ -17930,7 +21942,9 @@ ${revisionText}`);
         node.innerHTML = `<span>${backupId ? "불러오기 실패" : "복구 백업 없음 · 재생성 필요"}</span>`;
         appendDebugLog("persona_visual", "image_asset_preview_failed", { assetPath, mime, personaKey, emotion, backupId, error: errorForLog(error) }, "warn");
       }
-    }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, nodes.length) }, () => hydrateNext()));
   }
 
   function renderAssetPromptEditor(entry) {
@@ -17973,8 +21987,8 @@ ${revisionText}`);
         return `
       <article class="lia-asset-card lia-asset-card-empty" data-visual-asset-card="${htmlEscape(card.emotion)}">
         <div class="lia-asset-card-top"><strong>${htmlEscape(card.emotion)}</strong><button class="lia-asset-upload-inline" type="button" data-visual-asset-manual-upload="${htmlEscape(card.emotion)}" title="이 감정 칸에 이미지 업로드" aria-label="${htmlEscape(card.emotion)} 이미지 업로드">＋</button></div>
-        <div class="lia-asset-thumb lia-asset-thumb-empty"><span>비어 있는 감정 에셋 칸</span></div>
-        <div class="lia-asset-meta"><small>아직 저장된 이미지가 없습니다. 오른쪽 위 ＋ 버튼을 눌러 탐색기에서 이미지를 선택해 수동으로 붙여넣을 수 있습니다.</small></div>
+        <div class="lia-asset-thumb lia-asset-thumb-empty"><span>이미지 없음</span></div>
+        <div class="lia-asset-meta"><small>이미지를 올리거나 새로 만들어 주세요.</small></div>
         <div class="lia-asset-actions"><button class="btn-soft" type="button" data-visual-asset-manual-upload="${htmlEscape(card.emotion)}">이미지 업로드</button></div>
       </article>`;
       }
@@ -18346,13 +22360,14 @@ ${revisionText}`);
     try {
       const config = await readStoredIllustrationConfig();
       if (config.runtimeAttachEnabled === false) return content;
+      const store = await readPersonaVisualAssetStore();
+      if (!Object.keys(store.sets || {}).length) return content;
       const selection = await PersonaSelectionManager.read();
       const sourcePersonaId = String(selection?.bindingState?.sourcePersonaId || "").trim();
       const persona = sourcePersonaId
         ? (asArray(selection?.personas).find((item) => String(item?.id || "").trim() === sourcePersonaId) || selection?.effectivePersona)
         : selection?.effectivePersona;
       if (!persona?.id) return content;
-      const store = await readPersonaVisualAssetStore();
       const bundle = await findOrMigrateVisualBundleForPersona(persona, store);
       if (!bundle || !Object.keys(bundle.images || {}).length) return content;
       const inserted = await insertRuntimeEmotionAssetsIntoScenes(content, bundle, persona, config);
@@ -18450,12 +22465,12 @@ ${revisionText}`);
     const assetPresetStore = normalizeVisualAssetPresetStore(preservedVisualAssetPresetStore || {});
     const assetPresetOptions = assetPresetStore.items.map((preset) => `<option value="${htmlEscape(preset.id)}"${preset.id === preservedVisualAssetPresetId ? " selected" : ""}>${htmlEscape(preset.name)}</option>`).join("");
     return `
-      <section class="lia-page-hero lia-asset-hero"><span class="lia-section-eyebrow">PERSONA ASSET STUDIO</span><h2>감정 에셋</h2><p>Neutral을 Visual Master로 먼저 만들고 생성 조건을 확정한 뒤, 같은 Positive/Negative Prompt·seed·sampling·구도 조건에서 표정만 바꿔 감정 에셋을 만듭니다. 별도 Reference 노드는 필요하지 않습니다.</p></section>
+      <section class="lia-page-hero lia-asset-hero"><span class="lia-section-eyebrow">PERSONA ASSET STUDIO</span><h2>이미지와 감정 에셋</h2><p>기본 모습을 정하고, 다양한 표정을 더해요.</p></section>
       <section class="lia-asset-page-grid">
-        <aside class="lia-panel lia-asset-config-panel">
+        <details class="lia-panel lia-asset-config-panel lia-pocket-fold"><summary>이미지 만들기 설정<span>대상 · 스타일 · 구도</span></summary>
           <div class="lia-panel-title"><div><span class="lia-kicker">TARGET</span><h2>${htmlEscape(target.personaName)}</h2></div><span>${htmlEscape(target.displaySource)}</span></div>
           <label class="lia-field lia-field-full"><span>에셋 타겟 Persona</span><select id="dpg-asset-target-persona">${targetOptions.map((item) => `<option value="${htmlEscape(item.value)}"${item.value === selectedTargetValue ? " selected" : ""}>${htmlEscape(item.label)}</option>`).join("")}</select><small>기본값은 현재 Source Persona 자동입니다. 여기서 다른 Persona를 직접 골라 해당 Persona 전용 감정 에셋을 만들 수 있습니다.</small></label>
-          <div class="lia-context-strip"><span><b>Parent</b>${htmlEscape(target.personaId ? `persona:${target.personaId}` : target.personaKey)}</span><span><b>Prefix</b>${htmlEscape(target.assetPrefix)}</span></div>
+                      <div class="lia-context-strip"><span><b>대상 ID</b>${htmlEscape(target.personaId ? `persona:${target.personaId}` : target.personaKey)}</span><span><b>Prefix</b>${htmlEscape(target.assetPrefix)}</span></div>
           <div class="lia-context-stack">
             <div class="lia-preview-box"><h3>대상 요약</h3><p>${htmlEscape(target.identitySummary || target.personaSpec?.appearance || target.facts?.sourceDigest || "시각 요약을 아직 찾지 못했습니다.")}</p></div>
             <div class="lia-preview-box"><h3>저장 상태</h3><p>${htmlEscape(Object.keys(bundle.images || {}).length ? `${Object.keys(bundle.images || {}).length}개 저장됨 · Neutral Master ${bundle.images?.neutral ? "있음" : "없음"}` : "저장된 감정 에셋 없음")}</p></div>
@@ -18487,7 +22502,7 @@ ${revisionText}`);
             <button id="dpg-asset-generate-batch" class="btn-soft" type="button"${bundle.visualLock?.confirmed ? "" : " disabled"}>감정 묶음 생성</button>
             <button id="dpg-asset-discard-bundle" class="btn-danger" type="button"${Object.keys(bundle.images || {}).length || bundle.visualLock || bundle.visualLockCandidate ? "" : " disabled"}>감정 묶음 전체 폐기</button>
           </div>
-        </aside>
+        </details>
         <main class="lia-panel lia-asset-gallery-panel">
           <div class="lia-panel-title"><div><span class="lia-kicker">GALLERY</span><h2>저장된 감정 에셋</h2></div><span>${htmlEscape(Object.keys(bundle.images || {}).length.toString())}</span></div>
           <div class="lia-asset-gallery">${gallery}</div>
@@ -18541,7 +22556,7 @@ ${revisionText}`);
   }
 
   async function bindVisualAssetStudioUi(ctx) {
-    await hydrateVisualAssetThumbnails();
+    if (activeWorkspaceTab === "assets") void hydrateVisualAssetThumbnails();
     document.getElementById("dpg-img-provider")?.addEventListener("change", syncIllustrationProviderUi);
     document.getElementById("dpg-img-enabled")?.addEventListener("change", syncIllustrationProviderUi);
     document.getElementById("dpg-asset-target-persona")?.addEventListener("change", async (event) => {
@@ -18971,6 +22986,7 @@ ${revisionText}`);
   }
 
   function setStatus(message, tone = "info") {
+    document.getElementById("dpg-status")?.removeAttribute("data-idle");
     appendOperationLog("status", message, { workspace: activeWorkspaceTab, editorSection: preservedEditorSection }, tone === "ok" ? "ok" : tone === "error" ? "error" : "info");
     const el = document.getElementById("dpg-status");
     if (!el) return;
@@ -19299,6 +23315,7 @@ ${revisionText}`);
   }
 
   function bindFastGenerationStudio(ctx) {
+    bindLoreLimitControl();
     const syncRewritePrompt = () => {
       preservedUserRewriteGuidanceText = getUserRewriteGuidance();
       preservedRandomConceptText = getRandomConcept();
@@ -19506,6 +23523,7 @@ ${revisionText}`);
   }
 
   function bindPreviewTools(ctx) {
+    bindLoreLimitControl();
     const syncRewritePrompt = () => {
       preservedUserRewriteGuidanceText = getUserRewriteGuidance();
       preservedRandomConceptText = getRandomConcept();
@@ -19899,7 +23917,8 @@ ${revisionText}`);
         const choice = String(document.getElementById("dpg-live-persona-select")?.value || "").trim();
         const policy = String(document.getElementById("dpg-live-policy")?.value || "conservative").trim();
         const bindingPolicy = String(document.getElementById("dpg-live-binding-policy")?.value || "safe").trim();
-        const binding = await configureLivePersonaSync(ctx, choice || (livePersonaBinding?.sourcePersonaId ? `id:${livePersonaBinding.sourcePersonaId}` : ""), policy, bindingPolicy);
+        const currentBinding = choice ? null : await readLivePersonaBindingForContext(ctx);
+        const binding = await configureLivePersonaSync(ctx, choice || (currentBinding?.sourcePersonaId ? `id:${currentBinding.sourcePersonaId}` : ""), policy, bindingPolicy);
         activeWorkspaceTab = "realtime";
         await refreshPreview({ skipCapture: true });
         await refreshPersonaProofIndicator();
@@ -20008,6 +24027,7 @@ ${revisionText}`);
         layoutEl?.classList.remove("world-drawer-open");
       }
       layoutEl?.classList.toggle("persona-panel-open", preservedPersonaPanelOpen);
+      syncPocketPersonaDialog(preservedPersonaPanelOpen);
     };
     document.getElementById("dpg-persona-panel-close")?.addEventListener("click", () => setPersonaPanel(false));
     document.getElementById("dpg-persona-panel-backdrop")?.addEventListener("click", () => setPersonaPanel(false));
@@ -20115,15 +24135,27 @@ ${revisionText}`);
         const select = document.getElementById("dpg-result-vault");
         if (select) select.value = id;
         preservedResultVaultId = id;
-        document.querySelectorAll("[data-vault-card-id]").forEach((item) => item.classList.toggle("active", item === card));
+        document.querySelectorAll("[data-vault-card-id]").forEach((item) => { item.classList.toggle("active", item === card); item.setAttribute("aria-pressed", String(item === card)); });
+        const tools = document.querySelector(".lia-vault-tools");
+        if (tools) { tools.open = true; tools.scrollIntoView({block:"nearest"}); }
         syncResultVaultControls();
       });
     });
 
+    document.querySelectorAll("[data-pocket-tab]").forEach((button) => {
+      button.addEventListener("click", () => activateTab(button.getAttribute("data-pocket-tab")));
+    });
+    document.querySelectorAll('[data-pocket-personas]').forEach(button => button.addEventListener('click', () => document.getElementById('dpg-persona-panel-toggle')?.click()));
+    bindAction('lia-pocket-sync-toggle', async () => {
+      const result = await togglePocketLiveSync(ctx);
+      if (result.needsSetup) activateTab('realtime');
+      return {skipCapture:true};
+    });
     document.querySelectorAll(".dpg-tab-button[data-workspace-tab]").forEach((button) => {
       button.addEventListener("click", () => activateTab(String(button.getAttribute("data-workspace-tab") || "generate")));
     });
     void bindVisualAssetStudioUi(ctx);
+    syncPocketPersonaDialog(preservedPersonaPanelOpen, preservedPersonaPanelOpen);
     syncProviderUi();
     syncLLMSaveMode();
     keepActiveMobileSidebarTabVisible();
@@ -20142,6 +24174,7 @@ ${revisionText}`);
       bindPreviewTools(ctx);
       if (activeWorkspaceTab === "server") mountLiaServerConnectionPanel();
       setStatus(`준비 완료: 로어 후보 ${asArray(ctx.loreCandidates).length}개 → Persona 채택 ${asArray(ctx.personaLoreSignals).length}개 · 보호 ${ctx.personaLoreRerank?.protectedCount || 0}개`, "ok");
+      document.getElementById("dpg-status")?.setAttribute("data-idle", "true");
     } catch (error) {
       root.innerHTML = "";
       setStatus(`미리보기 실패: ${error?.message || error}`, "error");
@@ -20216,28 +24249,39 @@ ${revisionText}`);
   }
 
   function mountLiaServerConnectionPanel() {
-    const host = typeof document !== "undefined" ? document.getElementById("liaMemorySuiteServerConnectionPanel") : null;
-    if (!host) return false;
-    void MemorySuiteStorageBridge.mountConnectionPanel(host, {
-      title: "LIA · 서버 연결",
-      description: "LIA 보관함·World Blueprint·Live Persona 상태와 visual asset 데이터의 저장 방식을 관리합니다."
+    const storageHost = typeof document !== "undefined" ? document.getElementById("liaMemorySuiteServerConnectionPanel") : null;
+    if (!storageHost) return false;
+    if (storageHost) void MemorySuiteStorageBridge.mountConnectionPanel(storageHost, {
+      title: "저장과 서버",
+      description: "이 채팅의 기억을 어디에 보관할까요? 저장 위치에 맞춰 검색 연산도 연결됩니다.",
+      computeBridge: MemorySuiteLiaComputeBridge
     }).catch((error) => appendDebugLog("memory_suite", "server_connection_panel_failed", { error: errorForLog(error) }, "warn"));
     return true;
   }
 
   function activateTab(name) {
-    const normalized = ["generate", "edit", "realtime", "assets", "vault", "settings", "server"].includes(name) ? name : "generate";
+    const normalized = ["home", "generate", "edit", "realtime", "assets", "vault", "settings", "server"].includes(name) ? name : "generate";
     activeWorkspaceTab = normalized;
+    const workspace = document.querySelector(".lia-workspace");
+    if (workspace) workspace.scrollTop = 0;
     if (normalized !== "generate") preservedWorldDrawerOpen = false;
     const layout = document.querySelector(".lia-app-layout");
     if (layout) {
       layout.dataset.page = normalized;
+      layout.dataset.pocketGroup = pocketPrimaryTab(normalized);
       layout.classList.toggle("world-drawer-open", preservedWorldDrawerOpen);
     }
     document.querySelectorAll(".dpg-tab-button[data-workspace-tab]").forEach((button) => {
       button.classList.toggle("active", String(button.getAttribute("data-workspace-tab") || "") === normalized);
     });
+    document.querySelectorAll("[data-pocket-tab]").forEach((button) => {
+      const selected = button.getAttribute("data-pocket-tab") === pocketPrimaryTab(normalized);
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-current", selected ? "page" : "false");
+    });
+    document.querySelectorAll("[data-workspace-tab]").forEach((button) => button.setAttribute("aria-current", button.getAttribute("data-workspace-tab") === normalized ? "page" : "false"));
     const panelState = {
+      "lia-pocket-home": normalized === "home",
       "dpg-studio-panel": ["generate", "edit", "realtime"].includes(normalized),
       "dpg-assets-panel": normalized === "assets",
       "dpg-vault-panel": normalized === "vault",
@@ -20249,6 +24293,7 @@ ${revisionText}`);
     }
     keepActiveMobileSidebarTabVisible();
     if (normalized === "server") mountLiaServerConnectionPanel();
+    if (normalized === "assets") void hydrateVisualAssetThumbnails();
   }
   function bindAction(id, fn) {
     const button = document.getElementById(id);
@@ -20320,7 +24365,7 @@ ${revisionText}`);
           font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR", "Malgun Gothic", sans-serif;
         }
         * { box-sizing: border-box; }
-        html, body { margin: 0; min-height: 100%; background: transparent; }
+        html, body { margin: 0; min-height: 100%; background: transparent !important; background-color: transparent !important; background-image: none !important; color-scheme: normal !important; }
         body {
           min-height: 100vh;
           padding: 12px;
@@ -20339,7 +24384,7 @@ ${revisionText}`);
           overflow: auto;
           border: 1px solid var(--lia-line);
           border-radius: 24px;
-          background: linear-gradient(180deg, #0e131d 0%, #0a0e15 100%);
+          background: linear-gradient(180deg, #f4f0f8 0%, #f4f0f8 100%);
           box-shadow: 0 28px 90px rgba(0,0,0,.44);
         }
         .lia-header {
@@ -20352,7 +24397,7 @@ ${revisionText}`);
           gap: 20px;
           padding: 16px 20px;
           border-bottom: 1px solid var(--lia-line);
-          background: rgba(14, 19, 29, .92);
+          background: #f4f0f8;
           backdrop-filter: blur(18px);
         }
         .lia-brand-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -20385,11 +24430,11 @@ ${revisionText}`);
         button:hover { transform: translateY(-1px); border-color: var(--lia-line-strong); filter: brightness(1.06); }
         .btn-primary {
           border-color: transparent;
-          color: #fff;
+          color:var(--lia-soft);
           background: linear-gradient(135deg, #728ff0, #967ce8);
           box-shadow: 0 10px 30px rgba(114,143,240,.18);
         }
-        .btn-danger { color: #ffd7df; border-color: rgba(255,130,150,.28); background: rgba(255,130,150,.09); }
+        .btn-danger { color:var(--lia-soft); border-color: rgba(255,130,150,.28); background: rgba(255,130,150,.09); }
         #dpg-status {
           position: sticky;
           top: 75px;
@@ -20400,13 +24445,13 @@ ${revisionText}`);
           min-height: 38px;
           padding: 9px 20px;
           border-bottom: 1px solid var(--lia-line);
-          background: rgba(11, 16, 24, .92);
+          background: #f4f0f8;
           color: var(--lia-muted);
           font-size: 12px;
           backdrop-filter: blur(16px);
         }
-        #dpg-status[data-tone="ok"] { color: #b8f5da; }
-        #dpg-status[data-tone="error"] { color: #ffc5cf; }
+        #dpg-status[data-tone="ok"] { color:var(--lia-soft); }
+        #dpg-status[data-tone="error"] { color:var(--lia-soft); }
         .lia-status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lia-success); box-shadow: 0 0 12px rgba(110,231,183,.65); flex: 0 0 auto; }
         #dpg-preview-root { padding: 18px 20px 24px; }
         .dpg-loading { padding: 22px; border: 1px solid var(--lia-line); border-radius: var(--lia-radius); background: var(--lia-surface); color: var(--lia-muted); }
@@ -20418,13 +24463,13 @@ ${revisionText}`);
           margin-bottom: 18px;
         }
         .dpg-tab-button { min-height: 42px; padding: 0 14px; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 13px; font-weight: 800; }
-        .dpg-tab-button.active { color: #fff; background: rgba(138,168,255,.16); border-color: rgba(138,168,255,.35); }
+        .dpg-tab-button.active { color:var(--lia-soft); background: rgba(138,168,255,.16); border-color: rgba(138,168,255,.35); }
         .lia-nav-icon { font-size: 13px; color: var(--lia-accent); }
         .lia-provider-chip { justify-self: end; max-width: 520px; padding: 8px 11px; border-radius: 999px; border: 1px solid var(--lia-line); color: var(--lia-muted); background: rgba(255,255,255,.03); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .dpg-tab-panel { display: none; }
         .dpg-tab-panel.active { display: block; }
         .lia-mode-stage,
-        .lia-settings-hero { margin-bottom: 16px; padding: 20px; border: 1px solid var(--lia-line); border-radius: var(--lia-radius); background: linear-gradient(145deg, rgba(21,29,43,.92), rgba(15,21,32,.92)); }
+        .lia-settings-hero { margin-bottom: 16px; padding: 20px; border: 1px solid var(--lia-line); border-radius: var(--lia-radius); background: linear-gradient(145deg, #f4f0f8, #f4f0f8); }
         .lia-section-eyebrow, .lia-kicker { color: var(--lia-accent); font-size: 10px; font-weight: 900; letter-spacing: .14em; text-transform: uppercase; }
         .lia-mode-head h2, .lia-settings-hero h2 { margin: 5px 0 5px; font-size: 20px; letter-spacing: -.03em; }
         .lia-mode-head p, .lia-settings-hero p { margin: 0; color: var(--lia-muted); font-size: 12px; line-height: 1.55; }
@@ -20432,19 +24477,19 @@ ${revisionText}`);
         .lia-mode-card { min-height: 82px; padding: 14px; display: grid; grid-template-columns: 42px minmax(0,1fr) auto; gap: 12px; align-items: center; text-align: left; }
         .lia-mode-card.active { border-color: rgba(138,168,255,.55); background: linear-gradient(135deg, rgba(116,144,238,.17), rgba(150,124,232,.12)); }
         .lia-mode-card.random.active { border-color: rgba(169,147,255,.55); }
-        .lia-mode-symbol { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; background: rgba(138,168,255,.12); color: #dfe7ff; font-weight: 950; font-size: 16px; }
+        .lia-mode-symbol { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 12px; background: rgba(138,168,255,.12); color:var(--lia-soft); font-weight: 950; font-size: 16px; }
         .lia-mode-copy { display: grid; gap: 4px; min-width: 0; }
         .lia-mode-copy strong { color: var(--lia-text); font-size: 14px; }
         .lia-mode-copy small { color: var(--lia-muted); font-size: 11px; line-height: 1.45; }
         .lia-mode-check { color: var(--lia-muted); font-size: 10px; font-weight: 850; }
-        .lia-mode-card.active .lia-mode-check { color: #cfd9ff; }
+        .lia-mode-card.active .lia-mode-check { color:var(--lia-soft); }
         .lia-mode-grid-four { grid-template-columns: repeat(2, minmax(0,1fr)); }
         .lia-realtime-hero { display:none; }
         .lia-app-layout[data-page="generate"] .lia-live-sync-standalone,
         .lia-app-layout[data-page="edit"] .lia-live-sync-standalone { display:none; }
         .lia-app-layout[data-page="realtime"] .lia-live-sync-standalone,
         .lia-app-layout[data-page="realtime"] .lia-realtime-hero { display:block; }
-        .lia-live-sync-panel { margin-top:14px; padding:16px; border:1px solid var(--lia-line); border-radius:18px; background:rgba(3,7,18,.24); }
+        .lia-live-sync-panel { margin-top:14px; padding:16px; border:1px solid var(--lia-line); border-radius:18px; background:#f4f0f8; }
         .lia-live-sync-panel.live-on { border-color:rgba(110,231,183,.3); background:rgba(110,231,183,.045); }
         .lia-live-sync-panel.live-paused { border-color:rgba(251,191,36,.28); }
         .lia-live-config-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
@@ -20453,7 +24498,7 @@ ${revisionText}`);
         .lia-live-status-grid b { color:var(--lia-muted); font-size:9px; text-transform:uppercase; letter-spacing:.08em; }
         .lia-live-status-grid span { color:var(--lia-soft); font-size:11px; }
         .lia-live-actions { display:grid; grid-template-columns:1.35fr 1fr 1fr 1fr; gap:8px; margin-top:10px; }
-        .lia-live-error { margin:10px 0 0; padding:9px 10px; border-radius:10px; color:#ffd7df; background:rgba(251,113,133,.1); border:1px solid rgba(251,113,133,.3); font-size:11px; }
+        .lia-live-error { margin:10px 0 0; padding:9px 10px; border-radius:10px; color:var(--lia-soft); background:rgba(251,113,133,.1); border:1px solid rgba(251,113,133,.3); font-size:11px; }
         .lia-live-state-columns { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:12px; }
         .lia-live-state-columns > div { padding:11px; border:1px solid var(--lia-line); border-radius:13px; background:rgba(255,255,255,.025); }
         .lia-live-state-columns h4 { margin:0 0 8px; color:var(--lia-soft); font-size:11px; }
@@ -20466,7 +24511,7 @@ ${revisionText}`);
         .lia-live-ledger-list div { display:grid; grid-template-columns:auto 1fr; gap:10px; padding:8px 9px; border-radius:10px; background:rgba(255,255,255,.03); }
         .lia-live-ledger-list b { color:var(--lia-accent); font-size:9px; }
         .lia-live-ledger-list span { color:var(--lia-muted); font-size:10px; }
-        .lia-evolution-panel { margin-top: 14px; padding: 16px; border: 1px solid var(--lia-line); border-radius: 18px; background: rgba(3,7,18,.22); }
+        .lia-evolution-panel { margin-top: 14px; padding: 16px; border: 1px solid var(--lia-line); border-radius: 18px; background: #f4f0f8; }
         .lia-evolution-evidence, .lia-evolution-summary { display:flex; justify-content:space-between; gap:12px; padding:10px 12px; margin-top:10px; border-radius:12px; background:rgba(255,255,255,.045); color:var(--lia-muted); font-size:12px; }
         .lia-evolution-evidence b, .lia-evolution-summary strong { color:var(--lia-soft); }
         .lia-evolution-list { display:grid; gap:8px; margin:12px 0; }
@@ -20488,12 +24533,12 @@ ${revisionText}`);
         .lia-context-hero small { display: block; margin-top: 2px; color: var(--lia-muted); font-size: 11px; }
         .lia-context-hero p { margin: 10px 0 0; color: var(--lia-soft); font-size: 11px; line-height: 1.5; }
         .lia-random-source-note { display: grid; gap: 4px; margin-bottom: 14px; padding: 12px; border: 1px dashed rgba(169,147,255,.28); border-radius: 13px; background: rgba(169,147,255,.055); }
-        .lia-random-source-note b { font-size: 12px; color: #e6ddff; }
+        .lia-random-source-note b { font-size: 12px; color:var(--lia-soft); }
         .lia-random-source-note span { color: var(--lia-muted); font-size: 10px; line-height: 1.5; }
         .lia-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--lia-soft); font-size: 11px; font-weight: 800; }
         .lia-field-full { width: 100%; }
         .lia-field input, .lia-field select, .lia-panel textarea, .lia-provider-panel input, .lia-provider-panel select, .lia-provider-panel textarea, .lia-vault-inner select {
-          width: 100%; max-width: 100%; border: 1px solid var(--lia-line); border-radius: 11px; background: #0b111a; color: var(--lia-text); padding: 10px 11px; outline: none; transition: .15s ease;
+          width: 100%; max-width: 100%; border: 1px solid var(--lia-line); border-radius: 11px; background: #f4f0f8; color: var(--lia-text); padding: 10px 11px; outline: none; transition: .15s ease;
         }
         .lia-field input:focus, .lia-field select:focus, .lia-panel textarea:focus, .lia-provider-panel input:focus, .lia-provider-panel select:focus, .lia-provider-panel textarea:focus { border-color: rgba(138,168,255,.6); box-shadow: 0 0 0 3px rgba(138,168,255,.10); }
         .lia-field small { color: var(--lia-muted); font-size: 10px; line-height: 1.45; font-weight: 600; }
@@ -20503,7 +24548,7 @@ ${revisionText}`);
         .lia-switch-row strong { font-size: 11px; color: var(--lia-soft); }
         .lia-switch-row small { color: var(--lia-muted); font-size: 9px; }
         .lia-switch-row input { position: absolute; opacity: 0; pointer-events: none; }
-        .lia-switch-row i { position: relative; width: 36px; height: 20px; border-radius: 999px; background: #2a3444; border: 1px solid var(--lia-line); transition: .18s ease; }
+        .lia-switch-row i { position: relative; width: 36px; height: 20px; border-radius: 999px; background: #f4f0f8; border: 1px solid var(--lia-line); transition: .18s ease; }
         .lia-switch-row i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #a8b2c2; transition: .18s ease; }
         .lia-switch-row input:checked + i { background: rgba(116,144,238,.55); border-color: rgba(138,168,255,.55); }
         .lia-switch-row input:checked + i::after { transform: translateX(16px); background: #fff; }
@@ -20515,7 +24560,7 @@ ${revisionText}`);
         .lia-fold > summary span { display: grid; gap: 3px; }
         .lia-fold > summary b { font-size: 12px; }
         .lia-fold > summary small { color: var(--lia-muted); font-size: 9px; }
-        .lia-fold > summary em { min-width: 28px; padding: 5px 8px; border-radius: 999px; background: rgba(138,168,255,.1); color: #cfd9ff; font-style: normal; font-size: 10px; text-align: center; }
+        .lia-fold > summary em { min-width: 28px; padding: 5px 8px; border-radius: 999px; background: rgba(138,168,255,.1); color:var(--lia-soft); font-style: normal; font-size: 10px; text-align: center; }
         .lia-fold[open] > summary { border-bottom: 1px solid var(--lia-line); }
         .lia-fold > :not(summary) { margin: 14px; }
         .lia-module-list { display: grid; gap: 7px; max-height: 220px; overflow: auto; }
@@ -20525,7 +24570,7 @@ ${revisionText}`);
         .lia-module-meta b { font-size: 10px; overflow-wrap: anywhere; }
         .lia-module-meta small, .dpg-module-empty { color: var(--lia-muted); font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
         .lia-context-stack { display: grid; gap: 8px; }
-        .lia-preview-box { border: 1px solid var(--lia-line); border-radius: 12px; padding: 11px; background: #0c121c; }
+        .lia-preview-box { border: 1px solid var(--lia-line); border-radius: 12px; padding: 11px; background: #f4f0f8; }
         .lia-preview-box h3 { margin: 0 0 6px; color: var(--lia-soft); font-size: 10px; }
         .lia-preview-box p { margin: 0; color: var(--lia-muted); font-size: 9px; line-height: 1.5; white-space: pre-wrap; }
         .lia-mini-list { display: grid; gap: 6px; }
@@ -20548,19 +24593,19 @@ ${revisionText}`);
         .lia-generate-icon { font-size: 18px; }
         .lia-generate-button > span:last-child { display: grid; gap: 2px; text-align: left; }
         .lia-generate-button strong { font-size: 13px; }
-        .lia-generate-button small { color: rgba(255,255,255,.72); font-size: 9px; }
+        .lia-generate-button small { color:var(--lia-muted); font-size: 9px; }
         .lia-icon-button { min-height: 58px; padding: 0 12px; font-size: 10px; font-weight: 800; }
         .lia-generation-status { margin-top: 10px; display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 8px; align-items: center; padding: 9px 11px; border-radius: 11px; border: 1px solid var(--lia-line); background: rgba(110,231,183,.035); color: var(--lia-muted); font-size: 10px; }
-        .lia-generation-status b { color: #b8f5da; font-size: 9px; }
+        .lia-generation-status b { color:var(--lia-soft); font-size: 9px; }
         .lia-prompt-textarea { min-height: 220px; max-height: 420px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important; font-size: 9px !important; line-height: 1.5 !important; }
         .lia-result-card { position: relative; }
         .lia-empty-result { padding: 28px 18px; display: grid; place-items: center; text-align: center; border: 1px dashed var(--lia-line-strong); border-radius: 14px; background: rgba(255,255,255,.018); }
-        .lia-empty-orb { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; margin-bottom: 9px; background: rgba(138,168,255,.10); color: #dce4ff; }
+        .lia-empty-orb { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; margin-bottom: 9px; background: rgba(138,168,255,.10); color:var(--lia-soft); }
         .lia-empty-result strong { font-size: 12px; }
         .lia-empty-result p { max-width: 440px; margin: 5px 0 0; color: var(--lia-muted); font-size: 10px; line-height: 1.5; }
         .lia-output-tabs { display: flex; gap: 6px; margin: 12px 0 8px; }
         .lia-tab { min-height: 32px; padding: 0 10px; font-size: 9px; font-weight: 850; }
-        .lia-tab.active { color: #fff; background: rgba(138,168,255,.14); border-color: rgba(138,168,255,.35); }
+        .lia-tab.active { color:var(--lia-soft); background: rgba(138,168,255,.14); border-color: rgba(138,168,255,.35); }
         .lia-code-output { min-height: 360px; max-height: 560px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important; font-size: 11px !important; line-height: 1.55 !important; white-space: pre-wrap; }
         .lia-output-pane { display: none; }
         .lia-output-pane.active { display: block; }
@@ -20581,7 +24626,7 @@ ${revisionText}`);
         .lia-json-output { min-height: 220px !important; max-height: 420px !important; }
         .lia-save-main { min-height: 54px; padding: 9px 12px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2px; font-weight: 900; }
         .lia-save-main span { font-size: 11px; }
-        .lia-save-main small { font-size: 8px; color: rgba(255,255,255,.7); }
+        .lia-save-main small { font-size: 8px; color:var(--lia-muted); }
         .lia-vault-fold { margin-top: 12px; }
         .lia-vault-inner { display: grid; gap: 8px; }
         .lia-vault-inner select { font-size: 10px; }
@@ -20600,11 +24645,11 @@ ${revisionText}`);
         .lia-log-counts span { padding:5px 7px; border:1px solid var(--lia-line); border-radius:999px; color:var(--lia-soft); background:rgba(255,255,255,.03); font-size:9px; font-weight:800; white-space:nowrap; }
         .lia-log-actions { display:flex; flex-wrap:wrap; gap:8px; }
         .lia-log-actions button { min-height:36px; padding:7px 10px; font-size:9px; font-weight:800; }
-                .lia-debug-export-fallback { margin-top:12px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(3,7,18,.42); }
+                .lia-debug-export-fallback { margin-top:12px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:#f4f0f8; }
         .lia-debug-export-fallback[hidden] { display:none !important; }
         .lia-debug-export-fallback-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px; }
-        .lia-debug-export-fallback textarea { width:100%; min-height:220px; max-height:420px; resize:vertical; box-sizing:border-box; border:1px solid var(--lia-line); border-radius:10px; background:#070b13; color:var(--lia-soft); padding:10px; font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
-.lia-log-recent { display:grid; gap:5px; padding:10px; border:1px solid var(--lia-line); border-radius:12px; background:rgba(3,7,18,.24); }
+        .lia-debug-export-fallback textarea { width:100%; min-height:220px; max-height:420px; resize:vertical; box-sizing:border-box; border:1px solid var(--lia-line); border-radius:10px; background:#f4f0f8; color:var(--lia-soft); padding:10px; font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.lia-log-recent { display:grid; gap:5px; padding:10px; border:1px solid var(--lia-line); border-radius:12px; background:#f4f0f8; }
         .lia-log-recent > strong { color:var(--lia-soft); font-size:10px; margin-bottom:2px; }
         .lia-log-row { display:grid; grid-template-columns:68px 90px minmax(0,1fr); gap:7px; align-items:start; padding:6px 7px; border-radius:8px; background:rgba(255,255,255,.025); font-size:9px; line-height:1.4; }
         .lia-log-row time { color:var(--lia-muted); font-variant-numeric:tabular-nums; }
@@ -20627,7 +24672,7 @@ ${revisionText}`);
         .lia-provider-section-head { display: grid; gap: 3px; margin-bottom: 8px; }
         .lia-provider-section-head strong { font-size: 12px; color: var(--lia-text); }
         .lia-provider-section-head small { font-size: 10px; line-height: 1.45; color: var(--lia-muted); }
-        .lia-provider-service > summary { color: #dbeafe; }
+        .lia-provider-service > summary { color:var(--lia-soft); }
         .lia-provider-json { min-height: 100px !important; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important; font-size: 9px !important; }
         .lia-comfy-binding-json { min-height: 190px !important; }
         .lia-comfy-binding-tools { gap:8px; }
@@ -20637,14 +24682,14 @@ ${revisionText}`);
         .lia-provider-stream-check strong { font-size: 10px; }
         .lia-provider-stream-check small { color: var(--lia-muted); font-size: 9px; line-height: 1.4; }
         .lia-blueprint-card {
-          background: linear-gradient(180deg, rgba(50, 64, 90, 0.98), rgba(29, 38, 58, 0.98));
+          background: linear-gradient(180deg, rgba(50, 64, 90, 0.98), #f4f0f8);
         }
         .lia-blueprint-card.is-ready { border-color: rgba(110, 231, 183, 0.28); }
         .lia-blueprint-summary {
           padding: 12px 13px;
           border: 1px solid rgba(143, 180, 255, 0.2);
           border-radius: 14px;
-          background: rgba(3, 7, 18, 0.24);
+          background: #f4f0f8;
           color: var(--lia-soft);
           font-size: 12px;
           line-height: 1.55;
@@ -20661,7 +24706,7 @@ ${revisionText}`);
           padding: 10px;
           border: 1px solid var(--lia-line);
           border-radius: 12px;
-          background: rgba(3, 7, 18, 0.22);
+          background: #f4f0f8;
         }
         .lia-blueprint-mini-grid b, .lia-spec-grid b { color: var(--lia-soft); font-size: 11px; }
         .lia-blueprint-mini-grid span, .lia-spec-grid span { color: var(--lia-muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
@@ -20675,7 +24720,7 @@ ${revisionText}`);
         .lia-subhead h3, .lia-audit-head h3 { margin:2px 0 0; color:var(--lia-text); font-size:15px; }
         .lia-candidate-note { margin:8px 0 12px; color:var(--lia-muted); font-size:11px; line-height:1.55; }
         .lia-candidate-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
-        .lia-candidate-card { position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-width:0; padding:14px; border:1px solid var(--lia-line); border-radius:16px; background:rgba(3,7,18,.28); color:var(--lia-text); text-align:left; box-shadow:none; }
+        .lia-candidate-card { position:relative; display:flex; flex-direction:column; align-items:flex-start; gap:6px; min-width:0; padding:14px; border:1px solid var(--lia-line); border-radius:16px; background:#f4f0f8; color:var(--lia-text); text-align:left; box-shadow:none; }
         .lia-candidate-card.active { border-color:rgba(110,231,183,.6); background:rgba(110,231,183,.09); box-shadow:0 0 0 2px rgba(110,231,183,.08) inset; }
         .lia-candidate-card strong { font-size:15px; }
         .lia-candidate-card > small { color:var(--lia-muted); font-size:10px; }
@@ -20685,7 +24730,7 @@ ${revisionText}`);
         .lia-candidate-card dt { color:var(--lia-accent-2); }
         .lia-candidate-card dd { margin:0; color:var(--lia-muted); line-height:1.45; }
         .lia-candidate-card em { margin-top:auto; padding-top:5px; color:var(--lia-success); font-size:10px; font-style:normal; font-weight:800; }
-        .lia-candidate-number { position:absolute; top:10px; right:11px; color:rgba(255,255,255,.28); font-size:11px; font-weight:900; }
+        .lia-candidate-number { position:absolute; top:10px; right:11px; color:var(--lia-muted); font-size:11px; font-weight:900; }
         .lia-candidate-empty { grid-column:1/-1; padding:18px; border:1px dashed var(--lia-line); border-radius:14px; color:var(--lia-muted); font-size:11px; text-align:center; }
         .lia-spec-workshop-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; }
         .lia-spec-workshop-head > div:first-child { display:grid; gap:3px; }
@@ -20693,7 +24738,7 @@ ${revisionText}`);
         .lia-spec-workshop-head span { color:var(--lia-muted); font-size:10px; }
         .lia-spec-workshop-actions { display:flex; gap:8px; }
         .lia-spec-field-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
-        .lia-spec-field-card { display:flex; flex-direction:column; min-width:0; gap:8px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(3,7,18,.25); }
+        .lia-spec-field-card { display:flex; flex-direction:column; min-width:0; gap:8px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:#f4f0f8; }
         .lia-spec-field-card.locked { border-color:rgba(251,191,36,.38); background:rgba(251,191,36,.055); }
         .lia-spec-field-card header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .lia-spec-field-card header b { color:var(--lia-soft); font-size:11px; }
@@ -20701,7 +24746,7 @@ ${revisionText}`);
         .lia-spec-field-card header input { width:auto; accent-color:var(--lia-warning); }
         .lia-spec-field-card p { flex:1; margin:0; color:var(--lia-muted); font-size:10px; line-height:1.5; white-space:pre-wrap; overflow-wrap:anywhere; }
         .lia-spec-field-card .lia-spec-reroll { width:100%; min-height:34px; padding:7px 9px; font-size:10px; }
-        .lia-audit-panel { margin-top:12px; padding:14px; border:1px solid var(--lia-line); border-radius:18px; background:rgba(3,7,18,.24); }
+        .lia-audit-panel { margin-top:12px; padding:14px; border:1px solid var(--lia-line); border-radius:18px; background:#f4f0f8; }
         .lia-audit-panel.audit-pass { border-color:rgba(110,231,183,.35); }
         .lia-audit-panel.audit-warn { border-color:rgba(251,191,36,.38); }
         .lia-audit-panel.audit-fail { border-color:rgba(251,113,133,.42); }
@@ -20729,7 +24774,7 @@ ${revisionText}`);
         .lia-audit-fix-item b { display:block; color:var(--lia-soft); font-size:9px; }
         .lia-audit-fix-item small { display:block; margin-top:3px; color:var(--lia-muted); font-size:9px; line-height:1.45; }
         .lia-audit-diff { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin-top:8px; }
-        .lia-audit-diff > div { min-width:0; padding:7px; border:1px solid var(--lia-line); border-radius:9px; background:rgba(2,6,23,.32); }
+        .lia-audit-diff > div { min-width:0; padding:7px; border:1px solid var(--lia-line); border-radius:9px; background:#f4f0f8; }
         .lia-audit-diff em { display:block; margin-bottom:4px; color:var(--lia-muted); font-size:8px; font-style:normal; font-weight:800; }
         .lia-audit-diff pre { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--lia-soft); font:500 9px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
         .lia-spec-fold { margin-top: 14px; }
@@ -20742,7 +24787,7 @@ ${revisionText}`);
         .lia-rerank-meta span { padding:6px 8px; border:1px solid var(--lia-line); border-radius:999px; color:var(--lia-muted); font-size:9px; background:rgba(255,255,255,.03); }
         .lia-rerank-meta b { color:var(--lia-soft); }
         .lia-rerank-columns { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-        .lia-rerank-columns > section { min-width:0; padding:11px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(3,7,18,.24); }
+        .lia-rerank-columns > section { min-width:0; padding:11px; border:1px solid var(--lia-line); border-radius:14px; background:#f4f0f8; }
         .lia-rerank-columns header { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
         .lia-rerank-columns header b { color:var(--lia-soft); font-size:11px; }
         .lia-rerank-columns header small { color:var(--lia-muted); font-size:9px; }
@@ -20755,12 +24800,12 @@ ${revisionText}`);
         .lia-rerank-row-head b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--lia-soft); font-size:10px; }
         .lia-rerank-row-head strong { color:var(--lia-accent); font-size:9px; }
         .lia-rerank-badge { padding:3px 5px; border-radius:999px; background:rgba(143,180,255,.12); color:var(--lia-muted); font-size:8px; font-weight:800; }
-        .lia-rerank-row.protected .lia-rerank-badge { color:#fde68a; background:rgba(251,191,36,.12); }
-        .lia-rerank-row.selected .lia-rerank-badge { color:#d9fff0; background:rgba(110,231,183,.09); }
+        .lia-rerank-row.protected .lia-rerank-badge { color:var(--lia-soft); background:rgba(251,191,36,.12); }
+        .lia-rerank-row.selected .lia-rerank-badge { color:var(--lia-soft); background:rgba(110,231,183,.09); }
         .lia-rerank-row small { color:var(--lia-muted); font-size:8px; line-height:1.4; overflow-wrap:anywhere; }
         .lia-rerank-note { margin:0 14px 14px; color:var(--lia-muted); font-size:9px; line-height:1.5; }
         .lia-rerank-empty { padding:10px; color:var(--lia-muted); font-size:9px; text-align:center; }
-        .lia-lore-protected-mini { margin-left:4px; padding:2px 4px; border-radius:999px; background:rgba(251,191,36,.12); color:#fde68a; font-size:8px; font-style:normal; }
+        .lia-lore-protected-mini { margin-left:4px; padding:2px 4px; border-radius:999px; background:rgba(251,191,36,.12); color:var(--lia-soft); font-size:8px; font-style:normal; }
 
         @media (max-width: 980px) {
           .lia-bilingual-result { grid-template-columns: 1fr; }
@@ -20798,7 +24843,7 @@ ${revisionText}`);
         }
 
         .lia-compiler-panel, .lia-preflight-panel, .lia-lineage-panel {
-          margin-top: 14px; padding: 15px; border: 1px solid var(--lia-line); border-radius: 18px; background: rgba(3, 7, 18, 0.22);
+          margin-top: 14px; padding: 15px; border: 1px solid var(--lia-line); border-radius: 18px; background: #f4f0f8;
         }
         .lia-compiler-head, .lia-preflight-head, .lia-lineage-panel { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
         .lia-compiler-head h3, .lia-preflight-head h3, .lia-lineage-panel h3 { margin: 2px 0 0; color: var(--lia-text); font-size: 15px; }
@@ -20813,8 +24858,8 @@ ${revisionText}`);
         .lia-preflight-grid > div { display: grid; gap: 4px; padding: 10px 11px; border-radius: 12px; background: rgba(255,255,255,.045); }
         .lia-preflight-grid b { color: var(--lia-soft); font-size: 11px; } .lia-preflight-grid span { color: var(--lia-muted); font-size: 12px; line-height: 1.45; }
         .lia-preflight-head > strong { padding: 6px 9px; border-radius: 999px; font-size: 11px; border: 1px solid var(--lia-line); }
-        .lia-preflight-head > strong.good { color: #d9fff0; border-color: rgba(110,231,183,.35); } .lia-preflight-head > strong.warn { color: #fde68a; border-color: rgba(251,191,36,.35); } .lia-preflight-head > strong.danger { color: #ffd7df; border-color: rgba(251,113,133,.4); }
-        .lia-preflight-warning { margin: 10px 0 0; color: #ffd7df; font-size: 12px; } .lia-preflight-warning.soft { color: #fde68a; }
+        .lia-preflight-head > strong.good { color:var(--lia-soft); border-color: rgba(110,231,183,.35); } .lia-preflight-head > strong.warn { color:var(--lia-soft); border-color: rgba(251,191,36,.35); } .lia-preflight-head > strong.danger { color:var(--lia-soft); border-color: rgba(251,113,133,.4); }
+        .lia-preflight-warning { margin: 10px 0 0; color:var(--lia-soft); font-size: 12px; } .lia-preflight-warning.soft { color:var(--lia-soft); }
         .lia-lineage-panel > div { min-width: 0; } .lia-lineage-panel p { overflow-wrap: anywhere; } .lia-lineage-actions { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; } .lia-lineage-actions span { color: var(--lia-muted); font-size: 11px; }
 
         @media (max-width: 920px) {
@@ -20826,13 +24871,13 @@ ${revisionText}`);
         /* v0.17 sidebar workspace */
         #dpg-preview-root { padding: 0; }
         .lia-app-layout { display:grid; grid-template-columns:210px minmax(0,1fr) 310px; min-height:720px; }
-        .lia-sidebar { position:sticky; top:113px; align-self:start; height:calc(min(960px, 100vh - 24px) - 113px); min-height:560px; display:flex; flex-direction:column; gap:12px; padding:14px 12px; border-right:1px solid var(--lia-line); background:rgba(7,11,18,.58); overflow:hidden; }
+        .lia-sidebar { position:sticky; top:113px; align-self:start; height:calc(min(960px, 100vh - 24px) - 113px); min-height:560px; display:flex; flex-direction:column; gap:12px; padding:14px 12px; border-right:1px solid var(--lia-line); background:#f4f0f8; overflow:hidden; }
         .lia-sidebar-top { display:grid; gap:10px; }
         .lia-sidebar-collapse { justify-self:end; width:30px; height:30px; padding:0; border:1px solid var(--lia-line); border-radius:9px; background:rgba(255,255,255,.045); color:var(--lia-muted); }
         .lia-sidebar-nav { display:grid; gap:7px; }
         .lia-sidebar .dpg-tab-button { justify-content:flex-start; width:100%; min-height:44px; padding:0 12px; border-radius:12px; background:transparent; border-color:transparent; color:var(--lia-muted); }
         .lia-sidebar .dpg-tab-button:hover { background:rgba(255,255,255,.05); }
-        .lia-sidebar .dpg-tab-button.active { color:#fff; background:rgba(138,168,255,.15); border-color:rgba(138,168,255,.28); }
+        .lia-sidebar .dpg-tab-button.active { color:var(--lia-soft); background:rgba(138,168,255,.15); border-color:rgba(138,168,255,.28); }
         .lia-sidebar .lia-nav-icon { width:24px; text-align:center; font-size:16px; }
         .lia-sidebar-current { margin-top:auto; display:grid; gap:5px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(255,255,255,.035); min-width:0; }
         .lia-sidebar-caption { color:var(--lia-muted); font-size:9px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
@@ -20872,9 +24917,9 @@ ${revisionText}`);
         .lia-world-summary-copy { display:grid; gap:3px; min-width:0; }
         .lia-world-summary-copy strong { color:var(--lia-text); font-size:13px; }
         .lia-world-summary-copy small { color:var(--lia-muted); font-size:10px; }
-        .lia-side-column { position:fixed !important; z-index:70; top:12px; right:12px; bottom:12px; width:min(430px, calc(100vw - 36px)); display:block !important; padding:14px; overflow:auto; border:1px solid var(--lia-line-strong); border-radius:22px; background:#111827; box-shadow:0 30px 90px rgba(0,0,0,.56); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease, opacity .2s ease; }
+        .lia-side-column { position:fixed !important; z-index:70; top:12px; right:12px; bottom:12px; width:min(430px, calc(100vw - 36px)); display:block !important; padding:14px; overflow:auto; border:1px solid var(--lia-line-strong); border-radius:22px; background:#f4f0f8; box-shadow:0 30px 90px rgba(0,0,0,.56); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease, opacity .2s ease; }
         .lia-app-layout.world-drawer-open .lia-side-column { transform:translateX(0); opacity:1; pointer-events:auto; }
-        .lia-drawer-head { position:sticky; top:-14px; z-index:3; display:flex; align-items:center; justify-content:space-between; gap:12px; margin:-14px -14px 12px; padding:14px; border-bottom:1px solid var(--lia-line); background:rgba(17,24,39,.96); backdrop-filter:blur(14px); }
+        .lia-drawer-head { position:sticky; top:-14px; z-index:3; display:flex; align-items:center; justify-content:space-between; gap:12px; margin:-14px -14px 12px; padding:14px; border-bottom:1px solid var(--lia-line); background:#f4f0f8; backdrop-filter:blur(14px); }
         .lia-drawer-head > div { display:grid; gap:2px; }
         .lia-drawer-head strong { color:var(--lia-text); font-size:15px; }
         .lia-drawer-backdrop { position:fixed; z-index:69; inset:0; display:none; background:rgba(0,0,0,.48); backdrop-filter:blur(2px); }
@@ -20883,14 +24928,9 @@ ${revisionText}`);
         .lia-mode-head { margin-bottom:8px; }
         .lia-mode-head h2 { font-size:18px; }
         .lia-mode-head p { display:none; }
-        .lia-mode-grid-four { grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:7px !important; }
-        .lia-mode-card { min-height:54px !important; padding:9px 10px !important; grid-template-columns:32px minmax(0,1fr) !important; }
-        .lia-mode-copy small, .lia-mode-check { display:none !important; }
-        .lia-mode-symbol { width:30px !important; height:30px !important; border-radius:9px !important; }
-        .lia-mode-copy strong { font-size:11px !important; }
-        .lia-editor-tabs { display:flex; gap:6px; overflow:auto; margin:0 0 14px; padding:4px; border:1px solid var(--lia-line); border-radius:13px; background:rgba(3,7,18,.25); }
+        .lia-editor-tabs { display:flex; gap:6px; overflow:auto; margin:0 0 14px; padding:4px; border:1px solid var(--lia-line); border-radius:13px; background:#f4f0f8; }
         .lia-editor-tab { flex:0 0 auto; padding:8px 11px; border:0; border-radius:9px; color:var(--lia-muted); background:transparent; font-size:10px; font-weight:800; }
-        .lia-editor-tab.active { color:#fff; background:rgba(138,168,255,.16); }
+        .lia-editor-tab.active { color:var(--lia-soft); background:rgba(138,168,255,.16); }
         .lia-result-card [data-editor-block] { display:none; }
         .lia-result-card[data-editor-section="persona"] [data-editor-block="persona"],
         .lia-result-card[data-editor-section="prompt"] [data-editor-block="prompt"],
@@ -20923,14 +24963,14 @@ ${revisionText}`);
         .lia-vault-card p { min-height:32px; margin:0; color:var(--lia-muted); font-size:10px; line-height:1.45; }
         .lia-vault-card-meta { display:flex; flex-wrap:wrap; gap:5px; }
         .lia-vault-card-meta span { padding:3px 5px; border:1px solid var(--lia-line); border-radius:999px; color:var(--lia-muted); font-size:8px; }
-        .lia-vault-card-meta span.good { color:#d9fff0; border-color:rgba(110,231,183,.3); }
-        .lia-vault-card-meta span.warn { color:#fde68a; border-color:rgba(251,191,36,.3); }
-        .lia-vault-card-meta span.danger { color:#ffd7df; border-color:rgba(251,113,133,.35); }
+        .lia-vault-card-meta span.good { color:var(--lia-soft); border-color:rgba(110,231,183,.3); }
+        .lia-vault-card-meta span.warn { color:var(--lia-soft); border-color:rgba(251,191,36,.3); }
+        .lia-vault-card-meta span.danger { color:var(--lia-soft); border-color:rgba(251,113,133,.35); }
         .lia-vault-empty { grid-column:1/-1; display:grid; gap:5px; padding:32px; text-align:center; border:1px dashed var(--lia-line-strong); border-radius:16px; color:var(--lia-muted); }
         .lia-settings-hero { margin-top:0 !important; }
 
         /* v0.21 Persona binding side panel */
-        .lia-persona-panel { position:sticky; top:113px; align-self:start; height:calc(min(960px, 100vh - 24px) - 113px); min-height:560px; display:flex; flex-direction:column; gap:10px; padding:14px 12px 12px; overflow:hidden; border-left:1px solid var(--lia-line); background:rgba(7,11,18,.64); }
+        .lia-persona-panel { position:sticky; top:113px; align-self:start; height:calc(min(960px, 100vh - 24px) - 113px); min-height:560px; display:flex; flex-direction:column; gap:10px; padding:14px 12px 12px; overflow:hidden; border-left:1px solid var(--lia-line); background:#f4f0f8; }
         .lia-persona-panel-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
         .lia-persona-panel-head > div:first-child { display:grid; gap:2px; }
         .lia-persona-panel-head strong { color:var(--lia-text); font-size:15px; }
@@ -20947,7 +24987,7 @@ ${revisionText}`);
         .lia-binding-swatch.dynamic, .lia-persona-legend i.dynamic { background:#b06cff; box-shadow:0 0 0 2px rgba(176,108,255,.12); }
         .lia-persona-binding-summary .effective { display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px 8px; margin-top:3px; padding-top:7px; border-top:1px solid var(--lia-line); }
         .lia-persona-binding-summary .effective span { color:var(--lia-muted); font-size:9px; }
-        .lia-persona-binding-summary .effective strong { color:#fff; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+        .lia-persona-binding-summary .effective strong { color:var(--lia-soft); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
         .lia-persona-binding-summary .effective em { grid-column:1/-1; color:var(--lia-muted); font-size:8px; font-style:normal; text-align:right; }
         .lia-persona-proof { display:grid; gap:7px; padding:10px 11px; border:1px solid var(--lia-line); border-radius:13px; background:rgba(255,255,255,.03); }
         .lia-persona-proof.good { border-color:rgba(110,231,183,.42); background:rgba(110,231,183,.055); }
@@ -20961,12 +25001,12 @@ ${revisionText}`);
         .lia-persona-proof-main b { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--lia-text); font-size:11px; }
         .lia-persona-proof-main em { flex:0 0 auto; color:var(--lia-muted); font-size:7px; font-style:normal; font-weight:850; }
         .lia-persona-proof p { margin:0; color:var(--lia-muted); font-size:8px; line-height:1.45; }
-        .lia-persona-proof small { color:rgba(255,255,255,.45); font-size:7px; }
+        .lia-persona-proof small { color:var(--lia-muted); font-size:7px; }
         .lia-persona-proof button { min-height:30px; padding:5px 8px; font-size:8px; }
         .lia-persona-legend { display:flex; flex-wrap:wrap; gap:5px 9px; align-items:center; color:var(--lia-muted); font-size:8px; line-height:1.4; }
         .lia-persona-legend span { display:inline-flex; gap:5px; align-items:center; }
         .lia-persona-legend i { width:7px; height:7px; border-radius:99px; }
-        .lia-persona-legend small { width:100%; color:rgba(255,255,255,.4); font-size:8px; }
+        .lia-persona-legend small { width:100%; color:var(--lia-muted); font-size:8px; }
         .lia-persona-search { display:grid; gap:4px; }
         .lia-persona-search span { color:var(--lia-muted); font-size:8px; font-weight:800; }
         .lia-persona-search input { width:100%; min-height:34px; padding:7px 9px; border:1px solid var(--lia-line); border-radius:10px; color:var(--lia-text); background:rgba(255,255,255,.035); font-size:9px; outline:none; }
@@ -20979,17 +25019,17 @@ ${revisionText}`);
         .lia-persona-card.is-effective { background:rgba(255,255,255,.055); }
         .lia-persona-card.is-live { background:linear-gradient(135deg,rgba(176,108,255,.075),rgba(78,163,255,.045)); }
         .lia-persona-card-main { min-width:0; display:grid; grid-template-columns:34px minmax(0,1fr); gap:8px; align-items:center; padding:9px 7px 9px 9px; border:0; color:inherit; background:transparent; text-align:left; }
-        .lia-persona-avatar { width:32px; height:32px; display:grid; place-items:center; border-radius:10px; color:#eef5ff; background:rgba(255,255,255,.08); font-size:12px; font-weight:900; }
+        .lia-persona-avatar { width:32px; height:32px; display:grid; place-items:center; border-radius:10px; color:var(--lia-soft); background:rgba(255,255,255,.08); font-size:12px; font-weight:900; }
         .lia-persona-card-copy { min-width:0; display:grid; gap:2px; }
         .lia-persona-card-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--lia-text); font-size:11px; }
         .lia-persona-card-copy small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--lia-muted); font-size:8px; }
         .lia-persona-card-flags { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:4px; margin-left:42px; margin-top:-4px; }
         .lia-persona-card-flags em { padding:2px 5px; border-radius:999px; font-size:7px; font-style:normal; font-weight:900; letter-spacing:.02em; }
-        .lia-persona-card-flags .flag-risu { color:#cfe8ff; background:rgba(78,163,255,.14); }
-        .lia-persona-card-flags .flag-dynamic { color:#ead7ff; background:rgba(176,108,255,.15); }
-        .lia-persona-card-flags .flag-live { color:#d9fff0; background:rgba(110,231,183,.12); }
+        .lia-persona-card-flags .flag-risu { color:var(--lia-soft); background:rgba(78,163,255,.14); }
+        .lia-persona-card-flags .flag-dynamic { color:var(--lia-soft); background:rgba(176,108,255,.15); }
+        .lia-persona-card-flags .flag-live { color:var(--lia-soft); background:rgba(110,231,183,.12); }
         .lia-persona-pin { align-self:stretch; min-width:30px; border:0; border-left:1px solid var(--lia-line); border-radius:0 13px 13px 0; color:var(--lia-muted); background:rgba(255,255,255,.02); font-size:15px; }
-        .lia-persona-pin.active { color:#d9c2ff; background:rgba(176,108,255,.12); }
+        .lia-persona-pin.active { color:var(--lia-soft); background:rgba(176,108,255,.12); }
         .lia-persona-empty { padding:18px 10px; border:1px dashed var(--lia-line); border-radius:12px; color:var(--lia-muted); font-size:9px; text-align:center; }
         .lia-persona-panel-foot { display:grid; gap:6px; padding-top:8px; border-top:1px solid var(--lia-line); }
         .lia-persona-panel-foot button { min-height:34px; font-size:9px; }
@@ -21002,7 +25042,7 @@ ${revisionText}`);
           .lia-sidebar .dpg-tab-button { justify-content:center; padding:0; }
           .lia-sidebar-collapse { display:none; }
           #dpg-persona-panel-toggle { display:inline-flex; }
-          .lia-persona-panel { position:fixed; z-index:76; top:12px; right:12px; bottom:12px; width:min(340px,calc(100vw - 36px)); height:auto; min-height:0; border:1px solid var(--lia-line-strong); border-radius:20px; background:#0d1420; box-shadow:0 28px 90px rgba(0,0,0,.58); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease,opacity .2s ease; }
+          .lia-persona-panel { position:fixed; z-index:76; top:12px; right:12px; bottom:12px; width:min(340px,calc(100vw - 36px)); height:auto; min-height:0; border:1px solid var(--lia-line-strong); border-radius:20px; background:#f4f0f8; box-shadow:0 28px 90px rgba(0,0,0,.58); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease,opacity .2s ease; }
           .lia-app-layout.persona-panel-open .lia-persona-panel { transform:translateX(0); opacity:1; pointer-events:auto; }
           .lia-persona-panel-backdrop { position:fixed; z-index:75; inset:0; background:rgba(0,0,0,.48); backdrop-filter:blur(2px); }
           .lia-app-layout.persona-panel-open .lia-persona-panel-backdrop { display:block; }
@@ -21017,7 +25057,6 @@ ${revisionText}`);
           .lia-sidebar .dpg-tab-button { justify-content:center; padding:0; }
           .lia-sidebar-collapse { display:none; }
           .lia-vault-card-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-          .lia-mode-grid-four { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
         }
         @media (max-width: 680px) {
           .lia-app-layout { grid-template-columns:56px minmax(0,1fr); min-height:100vh; }
@@ -21027,7 +25066,6 @@ ${revisionText}`);
           .lia-vault-page-toolbar .lia-vault-actions { grid-template-columns:1fr 1fr; }
           .lia-world-summary { align-items:stretch; flex-direction:column; }
           .lia-world-summary button { width:100%; }
-          .lia-mode-grid-four { grid-template-columns:1fr 1fr !important; }
           .lia-editor-tabs { gap:3px; }
           .lia-editor-tab { padding:7px 8px; }
         }
@@ -21076,7 +25114,7 @@ ${revisionText}`);
             height:calc(60px + env(safe-area-inset-bottom, 0px)); min-height:0;
             display:block; padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
             overflow:hidden; border:0; border-top:1px solid var(--lia-line-strong);
-            background:rgba(8,12,20,.96); box-shadow:0 -12px 34px rgba(0,0,0,.32);
+            background:#f4f0f8; box-shadow:0 -12px 34px rgba(0,0,0,.32);
             backdrop-filter:blur(16px);
           }
           .lia-sidebar-top { display:block; min-width:0; overflow:hidden; }
@@ -21128,7 +25166,7 @@ ${revisionText}`);
         .lia-asset-card { display:grid; gap:10px; padding:12px; border:1px solid var(--lia-line); border-radius:16px; background: rgba(255,255,255,.03); }
         .lia-asset-card-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .lia-asset-card-empty { border-style:dashed; background: rgba(255,255,255,.015); }
-        .lia-asset-upload-inline { width:32px; height:32px; border:none; border-radius:999px; background:rgba(138,168,255,.16); color:#dce5ff; font-size:18px; font-weight:900; cursor:pointer; display:grid; place-items:center; }
+        .lia-asset-upload-inline { width:32px; height:32px; border:none; border-radius:999px; background:rgba(138,168,255,.16); color:var(--lia-soft); font-size:18px; font-weight:900; cursor:pointer; display:grid; place-items:center; }
         .lia-asset-upload-inline:hover { background:rgba(138,168,255,.26); }
         .lia-asset-add-zone { display:grid; gap:10px; margin-top:14px; padding-top:14px; border-top:1px solid var(--lia-line); }
         .lia-asset-add-button { width:100%; min-height:48px; border-style:dashed; font-size:12px; font-weight:900; letter-spacing:.01em; }
@@ -21146,23 +25184,23 @@ ${revisionText}`);
         .lia-asset-prompt-details[open] > summary { border-bottom:1px solid rgba(255,255,255,.08); }
         .lia-asset-prompt-editor { display:grid; gap:10px; padding:12px; }
         .lia-asset-prompt-editor textarea { min-height: 120px; }
-        .lia-asset-thumb { aspect-ratio: 3 / 4; border-radius:14px; overflow:hidden; border:1px solid var(--lia-line); background:#0b111a; display:grid; place-items:center; color:var(--lia-muted); font-size:11px; }
+        .lia-asset-thumb { aspect-ratio: 3 / 4; border-radius:14px; overflow:hidden; border:1px solid var(--lia-line); background:#f4f0f8; display:grid; place-items:center; color:var(--lia-muted); font-size:11px; }
         .lia-asset-thumb-empty { background:rgba(255,255,255,.025); border-style:dashed; text-align:center; padding:12px; }
         .lia-asset-thumb img { width:100%; height:100%; object-fit:cover; display:block; }
         .lia-asset-meta { display:grid; gap:4px; }
         .lia-asset-meta-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .lia-asset-meta strong { font-size:13px; }
         .lia-asset-meta small { color:var(--lia-muted); font-size:10px; }
-        .lia-asset-badge { padding:4px 8px; border-radius:999px; background:rgba(138,168,255,.16); color:#dce5ff; font-size:10px; font-weight:800; border:1px solid rgba(138,168,255,.32); }
+        .lia-asset-badge { padding:4px 8px; border-radius:999px; background:rgba(138,168,255,.16); color:var(--lia-soft); font-size:10px; font-weight:800; border:1px solid rgba(138,168,255,.32); }
         .lia-asset-actions { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:6px; }
         .lia-asset-actions-two { grid-template-columns: repeat(2, minmax(0,1fr)); }
         .lia-asset-actions button { min-height:36px; font-size:10px; font-weight:800; }
-        .lia-asset-stale { border-color: rgba(247,200,115,.35); background: rgba(247,200,115,.10); color: #ffe4a8; }
+        .lia-asset-stale { border-color: rgba(247,200,115,.35); background: rgba(247,200,115,.10); color:var(--lia-soft); }
         .lia-asset-lock-flow { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:6px; margin:12px 0 4px; }
         .lia-asset-step { display:flex; align-items:center; gap:7px; padding:8px; border:1px solid var(--lia-line); border-radius:11px; color:var(--lia-muted); font-size:10px; }
         .lia-asset-step b { width:20px; height:20px; display:grid; place-items:center; border-radius:50%; background:rgba(255,255,255,.05); }
-        .lia-asset-step.active { border-color:rgba(138,168,255,.38); color:#dce5ff; }
-        .lia-asset-step.done { border-color:rgba(110,231,183,.28); color:#b8f5da; }
+        .lia-asset-step.active { border-color:rgba(138,168,255,.38); color:var(--lia-soft); }
+        .lia-asset-step.done { border-color:rgba(110,231,183,.28); color:var(--lia-soft); }
         .lia-illustration-toggle { min-width:0; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:13px 14px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(255,255,255,.025); cursor:pointer; box-sizing:border-box; }
         .lia-illustration-toggle:hover { border-color:rgba(138,168,255,.30); background:rgba(138,168,255,.045); }
         .lia-illustration-toggle-copy { min-width:0; display:grid; gap:4px; }
@@ -21176,11 +25214,11 @@ ${revisionText}`);
         .lia-switch input:checked + .lia-switch-track .lia-switch-knob { transform:translateX(18px); background:#fff; }
         .lia-switch input:focus-visible + .lia-switch-track { outline:2px solid rgba(138,168,255,.75); outline-offset:2px; }
         .lia-illustration-rule { display:flex; align-items:flex-start; gap:10px; padding:12px 13px; border:1px solid rgba(110,231,183,.18); border-radius:13px; background:rgba(110,231,183,.045); box-sizing:border-box; }
-        .lia-illustration-rule-icon { flex:0 0 auto; width:22px; height:22px; display:grid; place-items:center; border-radius:7px; background:rgba(110,231,183,.10); color:#b8f5da; font-size:11px; }
+        .lia-illustration-rule-icon { flex:0 0 auto; width:22px; height:22px; display:grid; place-items:center; border-radius:7px; background:rgba(110,231,183,.10); color:var(--lia-soft); font-size:11px; }
         .lia-illustration-rule > span:last-child { display:grid; gap:4px; min-width:0; }
         .lia-illustration-rule strong { color:var(--lia-text); font-size:10px; }
         .lia-illustration-rule small { color:var(--lia-muted); font-size:9px; line-height:1.45; }
-        .lia-illustration-runtime { display:grid; gap:9px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:rgba(3,7,18,.24); box-sizing:border-box; }
+        .lia-illustration-runtime { display:grid; gap:9px; padding:12px; border:1px solid var(--lia-line); border-radius:14px; background:#f4f0f8; box-sizing:border-box; }
         .lia-illustration-runtime-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:0 2px 2px; }
         .lia-illustration-runtime-head > span { display:grid; gap:4px; }
         .lia-illustration-runtime-head strong { color:var(--lia-text); font-size:11px; }
@@ -21193,27 +25231,90 @@ ${revisionText}`);
         .lia-inline-emotion-asset-frame img { display:block; width:100%; max-width:100%; height:auto; margin:0 auto; border-radius:12px; }
         @media (max-width: 1080px) { .lia-asset-page-grid { grid-template-columns: 1fr; } }
 
+        /* Pocket Studio v2: compact phone canvas and progressive disclosure. */
+        :root {color-scheme:light;--lia-bg:#f8f7fa;--lia-surface:#fff;--lia-surface-2:#f3eef8;--lia-surface-3:#eee8f4;--lia-line:#eeeaf1;--lia-line-strong:#dcd3e5;--lia-text:#292731;--lia-soft:#5d5369;--lia-muted:#7d7387;--lia-accent:#8066ad;--lia-accent-2:#a68abe;--lia-success:#427461;--lia-warning:#896224;--lia-danger:#ac3654}
+        body{padding:12px;background:#eeedf2;font-size:14px;line-height:1.6;color:var(--lia-text)}
+        .lia-shell{container-type:inline-size;container-name:pocket;width:min(414px,100%);height:min(900px,calc(100dvh - 24px));min-height:0;max-height:none;display:flex;flex-direction:column;overflow:hidden;border:8px solid white;border-radius:38px;background:var(--lia-bg);box-shadow:0 20px 70px #49376015}
+        .lia-shell.pocket-wide{width:min(960px,100%)}
+        .lia-header{flex-shrink:0;position:relative;z-index:60;display:flex;justify-content:space-between;align-items:center;background:var(--lia-bg);padding:20px 24px 14px;border:0;gap:8px}
+        .lia-brand-title{font-size:23px;font-weight:750;letter-spacing:2px;margin:0;color:var(--lia-text)}.lia-brand-title span{font-size:10px;font-weight:400;letter-spacing:0;color:var(--lia-muted);margin-left:4px}
+        .lia-pocket-icon{width:21px;height:21px;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;fill:none;flex-shrink:0}
+        .lia-pocket-menu>summary{display:grid;place-items:center;width:44px;height:44px;background:white;border-radius:50%;color:#927da8;cursor:pointer;list-style:none}.lia-pocket-menu summary::-webkit-details-marker{display:none}
+        .lia-header-actions{position:absolute;right:18px;top:68px;display:grid;width:180px;background:white;padding:8px;border:1px solid var(--lia-line);border-radius:18px;box-shadow:0 10px 35px #49376020}.lia-header-actions button{min-height:44px;background:transparent;border:0;border-radius:12px;text-align:left;color:var(--lia-soft);font-size:12px;padding:10px 12px}.lia-header-actions button:hover{background:var(--lia-surface-2)}
+        #dpg-status{flex-shrink:0;font-size:12px;line-height:1.5;margin:0;padding:9px 24px;background:#f0eaf7;color:var(--lia-soft);border:0;max-height:112px;overflow:auto}#dpg-status[data-idle="true"]{display:none}#dpg-status[data-tone="error"]{background:#fff0f4;color:var(--lia-danger)}
+        #dpg-preview-root{flex:1;min-height:0;padding:0;overflow:hidden}
+        .lia-app-layout,.lia-app-layout.sidebar-collapsed,.lia-app-layout.persona-panel-open{position:relative;display:flex;flex-direction:column;min-height:0;height:100%;padding:0}
+        .lia-workspace{order:0;flex:1;min-height:0;min-width:0;width:100%;padding:4px 23px 25px;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#e5deec transparent}
+        .lia-pocket-nav{order:1;display:grid;flex-shrink:0;grid-template-columns:repeat(4,minmax(0,1fr));padding:10px 12px max(16px,env(safe-area-inset-bottom));gap:4px;border-top:1px solid var(--lia-line);background:white}
+        .lia-pocket-nav button{border:0;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:48px;padding:4px;color:#9b90a6;border-radius:12px;font-size:10px;font-weight:500}.lia-pocket-nav button.active{color:#8066ad;background:transparent}.lia-pocket-nav button .lia-pocket-icon{width:22px;height:22px}
+        .lia-pocket-subnav{display:flex;flex-wrap:wrap;gap:4px;margin:2px 0 18px}.lia-pocket-subnav button{display:none;min-height:40px;border:0;border-radius:12px;padding:8px 10px;background:transparent;color:var(--lia-muted);font-size:11px}
+        [data-pocket-group="home"] .lia-pocket-subnav [data-pocket-group="home"],[data-pocket-group="settings"] .lia-pocket-subnav [data-pocket-group="settings"]{display:block}.lia-pocket-subnav button.active{background:#eee7f5;color:#75588f}.lia-app-layout:is([data-page="home"],[data-page="generate"],[data-page="vault"],[data-page="settings"]) .lia-pocket-subnav{display:none}
+        .lia-pocket-title{font-size:25px;font-weight:650;letter-spacing:-1px;margin:8px 0 6px;line-height:1.4}.lia-pocket-chat{display:flex;gap:7px;align-items:center;color:var(--lia-muted);font-size:11px;margin:0;padding:9px 0 17px}.lia-pocket-chat .lia-pocket-icon{width:14px;height:14px}.lia-pocket-chat span{overflow-wrap:anywhere}
+        .lia-pocket-columns{display:block}.lia-pocket-profile{position:relative;border-radius:24px;background:#eee8f4;padding:18px 22px 20px;overflow:hidden}.lia-pocket-profile-top{display:flex;align-items:center;justify-content:space-between;height:28px}.lia-pocket-profile-top button{border:0;background:transparent;color:#a18fb2;padding:10px;min-height:44px;margin-right:-10px}.lia-pocket-profile-top .lia-pocket-icon{width:20px}
+        .lia-pocket-badge{display:inline-flex;align-items:center;gap:5px;font-size:10px;color:#82738d;background:#ffffffb5;border-radius:20px;padding:4px 8px}.lia-pocket-badge i{width:5px;height:5px;border-radius:50%;background:#799886}
+        .lia-pocket-person{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:22px 0}.lia-pocket-person>div:first-child{min-width:0}.lia-pocket-person h3{font-size:29px;font-weight:650;margin:0 0 7px;line-height:1.4;letter-spacing:-1px;overflow-wrap:anywhere}.lia-pocket-person p{font-size:11px;color:#87788e;line-height:1.65;margin:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+        .lia-pocket-avatar{height:84px;flex:0 0 84px;border-radius:30px;background:#ddd0eb;overflow:hidden}.lia-pocket-avatar svg{height:100%;width:100%;fill:#f5effa}.lia-pocket-profile-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.lia-pocket-profile-actions button{display:flex;align-items:center;justify-content:center;gap:6px;min-height:40px;padding:8px 3px;font-size:11px;color:#756681;background:#ffffffb5;border:0;border-radius:11px}.lia-pocket-profile-actions .lia-pocket-icon{width:14px;height:14px}
+        .lia-pocket-heading{font-size:13px;font-weight:650;margin:24px 0 11px}.lia-pocket-heading-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.lia-pocket-heading-row button{margin-top:12px;background:transparent;border:0;color:#9b90a6;font-size:10px;min-height:44px;padding:6px 0}
+        .lia-pocket-row{display:flex;align-items:center;gap:12px;width:100%;min-height:64px;padding:15px 17px;border:0;border-radius:19px;background:white;text-align:left;color:var(--lia-text);margin:0 0 10px}.lia-pocket-row>span:nth-child(2){flex:1;min-width:0}.lia-pocket-row strong{font-size:12px;font-weight:600;display:block}.lia-pocket-row small{font-size:10px;color:var(--lia-muted);margin-top:3px;display:block}.lia-pocket-row>.lia-pocket-icon{width:12px;height:12px;color:#b8adbf}
+        .lia-pocket-tile{display:grid;place-items:center;width:34px;height:34px;flex-shrink:0;border-radius:12px;background:#f1eaf8;color:#a48bb9}.lia-pocket-tile .lia-pocket-icon{width:18px;height:18px}
+        .lia-pocket-card{background:white;border:0;border-radius:20px;padding:16px}.lia-pocket-sync-head{display:flex;align-items:center;gap:10px}.lia-pocket-sync-head>div{flex:1}.lia-pocket-sync-head strong{display:block;font-size:12px;font-weight:600}.lia-pocket-sync-head small{display:block;color:var(--lia-muted);font-size:10px;margin-top:3px}
+        #lia-pocket-sync-toggle{position:relative;width:40px;min-height:24px;height:24px;flex-shrink:0;border:0;border-radius:20px;background:#d9d2df;padding:3px;cursor:pointer}#lia-pocket-sync-toggle:before{content:"";position:absolute;inset:-10px 0}#lia-pocket-sync-toggle span{display:block;width:18px;height:18px;background:white;border-radius:50%;transition:transform .15s}#lia-pocket-sync-toggle[aria-checked="true"]{background:#a58abd}#lia-pocket-sync-toggle[aria-checked="true"] span{transform:translateX(16px)}
+        .lia-pocket-progress{margin:12px 0 0 44px}.lia-pocket-progress progress{display:block;width:100%;height:4px;border:0;border-radius:8px;appearance:none;background:#f0ebf5;accent-color:#b9a5ce;overflow:hidden}.lia-pocket-progress progress::-webkit-progress-bar{background:#f0ebf5}.lia-pocket-progress progress::-webkit-progress-value{background:#b9a5ce;border-radius:8px}.lia-pocket-progress small{display:block;font-size:9px;color:#9a8ba6;margin-top:7px}
+        .lia-pocket-state{list-style:none;padding:0;margin:0}.lia-pocket-state li{display:flex;gap:11px;padding:11px 0;border-bottom:1px solid #f1edf5;line-height:1.6}.lia-pocket-state li:first-child{padding-top:0}.lia-pocket-state li:last-child{border:0;padding-bottom:0}.lia-pocket-state strong{font-size:11px;font-weight:400;display:block;color:#63586d}.lia-pocket-state small{font-size:9px;display:block;color:#aa9db5;margin-top:3px}.lia-pocket-state-dot{flex:0 0 5px;height:5px;border-radius:50%;background:#cbb8df;margin-top:7px}
+        .lia-pocket-fold{display:block;background:white;border:0;border-radius:18px;margin:12px 0;overflow:hidden}.lia-pocket-fold>summary{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:10px;list-style:none;min-height:60px;padding:16px 18px;color:var(--lia-text);font-size:12px;font-weight:600}.lia-pocket-fold>summary::-webkit-details-marker{display:none}.lia-pocket-fold>summary:after{content:'›';color:#ac9cba;font-size:20px;font-weight:400}.lia-pocket-fold[open]>summary:after{transform:rotate(90deg)}.lia-pocket-fold>summary>span{font-size:10px;color:var(--lia-muted);font-weight:400}.lia-pocket-fold[open]>summary{border-bottom:1px solid var(--lia-line)}.lia-pocket-fold>div:not(.lia-panel){padding:16px}.lia-pocket-fold>summary>svg{color:#a28ab9}
+        .lia-settings-fold>summary{justify-content:flex-start}.lia-settings-fold>summary>span{flex:1}.lia-settings-fold strong{display:block;font-size:12px;font-weight:600;color:var(--lia-text)}.lia-settings-fold small{display:block;font-size:10px;font-weight:400;margin-top:3px;color:var(--lia-muted)}.lia-pocket-settings-profile{display:flex;gap:12px;align-items:center;padding:22px 0 0}.lia-pocket-settings-profile>.lia-pocket-tile{width:44px;height:44px;font-size:20px;font-weight:600}.lia-pocket-settings-profile strong{display:block;font-size:13px;font-weight:600}.lia-pocket-settings-profile small{display:block;font-size:10px;color:var(--lia-muted);margin-top:3px}
+        .lia-shell .lia-section-eyebrow,.lia-shell .lia-kicker{display:none}.lia-shell .lia-page-hero,.lia-shell .lia-settings-hero,.lia-shell .lia-mode-stage{padding:0;background:none;border:0;box-shadow:none;margin:8px 0 22px}.lia-shell :is(.lia-page-hero,.lia-settings-hero,.lia-mode-stage) h2{font-size:25px;letter-spacing:-1px;font-weight:650;line-height:1.4;margin:0 0 8px}.lia-shell :is(.lia-page-hero,.lia-settings-hero,.lia-mode-stage) p{display:block;font-size:12px;line-height:1.65;color:var(--lia-muted);margin:0}
+        .lia-shell .lia-mode-grid-four{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px}.lia-shell .lia-mode-card{display:flex;flex-direction:column;align-items:flex-start;gap:10px;border:1px solid transparent;border-radius:19px;padding:16px;background:white;min-height:112px;min-width:0;text-align:left}.lia-shell .lia-mode-card.active{background:#f0e9f7;border-color:#d1bee2}.lia-shell .lia-mode-symbol{width:30px;height:30px;border-radius:11px;display:grid;place-items:center;background:#efe6f6;color:#a48aba;font-size:16px}.lia-shell .lia-mode-copy strong{font-size:12px;color:var(--lia-text);display:block}.lia-shell .lia-mode-copy small{font-size:10px;color:var(--lia-muted);display:block;line-height:1.5;margin-top:3px}.lia-shell .lia-mode-check{display:none}
+        .lia-shell .lia-world-summary{padding:15px;background:white;border:0;border-radius:18px;margin:0 0 15px;display:flex;gap:12px;align-items:center}.lia-shell .lia-world-summary-copy small{font-size:10px}.lia-shell .lia-world-summary-copy strong{font-size:13px}.lia-shell .lia-world-summary button{font-size:11px;white-space:nowrap;min-height:40px}
+        .lia-shell .lia-panel,.lia-shell .lia-live-sync-panel,.lia-shell .lia-compiler-panel,.lia-shell .lia-preflight-panel,.lia-shell .lia-lineage-panel,.lia-shell .lia-evolution-panel,.lia-shell .lia-audit-panel{background:white;border:0;box-shadow:none;border-radius:20px;padding:18px}.lia-shell .lia-panel-title h2,.lia-shell .lia-audit-head h3{font-size:16px;font-weight:600}.lia-shell .lia-panel-title span,.lia-shell .lia-audit-head p{font-size:11px;line-height:1.7}.lia-shell .lia-field{gap:6px}.lia-shell .lia-field>span,.lia-shell .lia-field>label{font-size:12px}.lia-shell .lia-field>small{font-size:10px;line-height:1.65;color:var(--lia-muted)}
+        .lia-shell input,.lia-shell textarea,.lia-shell select{background:#faf8fc;color:var(--lia-text);border-color:#e6deed;font-size:13px;border-radius:12px;max-width:100%;min-width:0}.lia-shell textarea{line-height:1.75}.lia-shell .lia-code-output{font-size:12px;line-height:1.7;min-height:240px}.lia-shell .lia-guidance-textarea{min-height:110px}
+        .lia-shell :is(.btn-soft,.btn-primary,.btn-danger){min-height:42px;border-radius:12px;font-size:12px;padding:10px 12px;font-weight:500}.lia-shell .btn-primary{background:#8870af;color:white;border:0}.lia-shell .btn-soft{background:#f3eef8;color:#7c678f;border:0}.lia-shell .btn-danger{background:#fff1f4;color:#a94962;border:0}.lia-shell .lia-primary-cta{border-radius:14px;background:#8870af;color:white;padding:14px}.lia-shell .lia-primary-cta strong{font-size:14px}.lia-shell .lia-primary-cta small{font-size:10px;color:#ede4f7}
+        .lia-shell .lia-live-config-grid,.lia-shell .lia-live-status-grid,.lia-shell .lia-live-state-columns,.lia-shell .lia-provider-grid,.lia-shell .lia-asset-page-grid,.lia-shell .lia-result-toolbar,.lia-shell .lia-edit-save-actions,.lia-shell .lia-live-actions{display:grid;grid-template-columns:1fr;gap:12px}.lia-shell .lia-live-status-grid>div{background:#f7f3fa;border:0;padding:12px;border-radius:12px}.lia-shell .lia-live-status-grid b,.lia-shell .lia-live-state-columns h4{font-size:12px}.lia-shell .lia-live-status-grid span,.lia-shell .lia-live-state-columns p,.lia-shell .lia-live-state-columns li{font-size:12px;line-height:1.65}.lia-shell .lia-live-state-columns>div{background:#f8f5fb;border:0;border-radius:16px}.lia-shell .lia-live-sync-panel .lia-pocket-fold{border:1px solid var(--lia-line)}.lia-shell .lia-live-actions{grid-template-columns:1fr 1fr}.lia-shell .lia-live-actions button{font-size:11px}.lia-shell .lia-live-error{color:var(--lia-danger);font-size:12px}
+        .lia-shell .lia-editor-tabs{background:transparent;border:0;padding:0;gap:5px}.lia-shell .lia-editor-tab{min-height:40px;background:white;border:0;border-radius:11px;color:var(--lia-muted);font-size:11px;padding:8px 12px}.lia-shell .lia-editor-tab.active{background:#eee5f6;color:#775691}.lia-shell .lia-spec-grid{grid-template-columns:1fr}.lia-shell .lia-spec-field-card{border:0;background:#f7f3fa;border-radius:15px}.lia-shell .lia-edit-save-panel{background:#f4eef9;border:0;border-radius:16px}.lia-shell .lia-edit-save-copy small{font-size:10px;line-height:1.6}.lia-shell .lia-edit-save-actions{grid-template-columns:1fr}.lia-shell .lia-edit-save-actions small{font-size:10px}
+        .lia-shell .lia-vault-page{background:none;padding:0}.lia-shell .lia-vault-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.lia-shell .lia-vault-card{display:block;min-width:0;padding:18px 15px;background:white;border:1px solid transparent;border-radius:20px;text-align:left}.lia-shell .lia-vault-card.active{border-color:#cbb7dc;background:#fcfaff}.lia-vault-avatar{display:grid;place-items:center;width:62px;height:62px;border-radius:22px;background:#ece3f4;color:#b49bc8;margin-bottom:14px}.lia-vault-avatar .lia-pocket-icon{width:34px;height:34px}.lia-shell .lia-vault-card header{display:block}.lia-shell .lia-vault-card header strong{font-size:14px;font-weight:600}.lia-shell .lia-vault-card header span{display:none}.lia-shell .lia-vault-card p{font-size:10px;color:var(--lia-muted);line-height:1.6;max-height:3.2em;overflow:hidden}.lia-shell .lia-vault-card-meta{display:none}.lia-shell .lia-vault-page-toolbar{display:grid;gap:12px}.lia-shell .lia-vault-actions{display:grid;grid-template-columns:1fr 1fr}.lia-pocket-new{width:100%;margin:12px 0}.lia-shell .lia-vault-empty,.lia-shell .lia-empty-result{background:white;border:0;border-radius:22px;padding:32px 20px}.lia-shell .lia-vault-empty strong,.lia-shell .lia-empty-result strong{font-size:15px}.lia-shell .lia-vault-empty span,.lia-shell .lia-empty-result p{font-size:12px}
+        .lia-shell .lia-asset-config-panel{padding:0}.lia-shell .lia-asset-config-panel>summary{padding:18px}.lia-shell .lia-asset-config-panel[open]{padding:0 16px 16px}.lia-shell .lia-asset-config-panel[open]>summary{margin:0 -16px 16px}.lia-shell .lia-asset-gallery-grid{grid-template-columns:1fr 1fr}.lia-shell .lia-asset-step{font-size:10px}.lia-shell .lia-asset-step.active{color:#77588f}.lia-shell .lia-asset-step.done{color:#427461}.lia-shell .lia-asset-badge{color:#77588f;background:#f1e9f8}.lia-shell .lia-asset-thumb{background:#f1ebf7}.lia-shell .lia-context-strip{font-size:10px;overflow-wrap:anywhere}
+        .lia-shell .lia-side-column{background:#fcfaff;border:0;box-shadow:0 20px 70px #49376025;visibility:hidden}.lia-shell .world-drawer-open .lia-side-column{visibility:visible}.lia-shell .lia-drawer-head{background:#fcfaff}.lia-shell .lia-persona-panel{position:absolute;inset:auto 0 0 auto;width:min(390px,100%);height:auto;min-height:0;max-height:96%;border:0;border-radius:24px 24px 0 0;background:#fcfaff;box-shadow:0 -10px 50px #49376020;z-index:55;display:none;transform:none;opacity:1;pointer-events:auto;overflow:auto;padding:18px}.lia-shell .persona-panel-open .lia-persona-panel{display:flex}.lia-shell .lia-persona-panel-backdrop{display:none;position:absolute;inset:0;z-index:54;background:#30213938;backdrop-filter:blur(2px)}.lia-shell .persona-panel-open .lia-persona-panel-backdrop{display:block}.lia-shell .lia-persona-card-list{overflow:visible;flex:none}.lia-shell .lia-persona-card{background:white;border-radius:18px}.lia-shell .lia-persona-card-copy strong{font-size:13px}.lia-shell .lia-persona-card-copy small,.lia-shell .lia-persona-panel small{font-size:10px}.lia-shell .lia-persona-pin{min-width:40px}.lia-shell .lia-persona-avatar{background:#eee5f6;color:#a58abb}.lia-shell .lia-persona-panel button{min-height:40px}.lia-shell .lia-persona-proof{background:#f4eef9;border:0}.lia-shell .lia-persona-proof-title{font-size:12px}
+        @container pocket (min-width:700px){.lia-pocket-columns{display:grid;grid-template-columns:1fr 1fr;gap:28px}.lia-pocket-columns>div:nth-child(2)>.lia-pocket-heading-row:first-child .lia-pocket-heading{margin-top:0}.lia-pocket-columns>div:nth-child(2)>.lia-pocket-heading-row:first-child button{margin-top:-5px}.lia-workspace{padding:8px 30px 30px}.lia-shell .lia-provider-grid,.lia-shell .lia-spec-grid{grid-template-columns:1fr 1fr}.lia-shell .lia-vault-card-grid{grid-template-columns:repeat(4,1fr)}.lia-shell .lia-mode-grid-four{grid-template-columns:repeat(4,1fr)}.lia-pocket-nav{padding-left:20%;padding-right:20%}.lia-shell .lia-asset-page-grid{grid-template-columns:1fr 1.3fr}}
+        @media(max-width:460px){body{padding:0}.lia-shell,.lia-shell.pocket-wide{width:100%;height:100dvh;border:0;border-radius:0}.lia-header{padding:20px 23px 14px}.lia-brand-title span{display:inline}.lia-workspace{padding:4px 23px 24px}.lia-shell .lia-world-summary{flex-direction:row}.lia-shell .lia-world-summary-copy{flex:1;min-width:0}.lia-shell .lia-world-summary-copy small{display:none}}
+        button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #b29ad6;outline-offset:3px}button:disabled{opacity:.45;cursor:not-allowed}
+        @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+
+        .lia-shell .lia-world-summary button{width:auto;flex:0 0 auto}.lia-shell .lia-world-summary-copy{flex:1;min-width:0}.lia-shell .lia-world-summary-copy strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .lia-shell .lia-compose-card>.lia-context-strip{display:none}.lia-shell .lia-compose-card .lia-context-strip{display:none}
+        .lia-shell .lia-result-card{padding:0;background:transparent}.lia-shell .lia-result-card>.lia-panel-title{padding:0;margin:8px 0 18px}.lia-shell .lia-result-card>.lia-panel-title h2{font-size:25px;font-weight:650;letter-spacing:-1px}.lia-shell .lia-editor-tabs{display:flex;flex-wrap:nowrap;overflow:auto}.lia-shell .lia-editor-tab{flex:1 0 auto}
+        .lia-shell .lia-edit-save-panel{padding:0;background:#eee6f6}.lia-shell .lia-edit-save-panel>.lia-edit-save-copy{padding:16px 16px 0}.lia-shell .lia-edit-save-panel>.lia-edit-save-actions{padding:16px}.lia-shell .lia-edit-save-copy>strong{display:none}
+        .lia-shell .lia-spec-fold{background:transparent;border:0;padding:0}.lia-shell .lia-spec-fold>summary{padding:14px 0}.lia-shell .lia-spec-workshop-head{padding:14px 0;display:grid;gap:10px}.lia-shell .lia-spec-workshop-actions{display:flex;gap:6px}.lia-shell .lia-spec-workshop-head b{font-size:11px}.lia-shell .lia-spec-workshop-head span{font-size:10px}.lia-shell .lia-spec-workshop-actions button{font-size:10px}
+        .lia-shell .lia-spec-field-grid{display:grid;grid-template-columns:1fr;gap:8px}.lia-shell .lia-spec-field-card{padding:0;background:white;margin:0;border:0}.lia-shell .lia-spec-field-card>summary{display:grid;grid-template-columns:70px minmax(0,1fr) 10px;gap:10px;padding:16px;min-height:64px}.lia-shell .lia-spec-field-card>summary strong{font-size:12px}.lia-shell .lia-spec-field-card>summary span{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lia-shell .lia-spec-field-card>div{padding:16px}.lia-shell .lia-spec-field-card p{font-size:12px;line-height:1.7}.lia-shell .lia-spec-field-card label{font-size:11px}
+        .lia-shell .lia-bilingual-result{display:grid;grid-template-columns:1fr;gap:18px}.lia-shell .lia-language-pane{background:white;border:0;border-radius:20px;padding:16px}.lia-shell .lia-language-pane h3{font-size:14px}.lia-shell .lia-variant-grid{grid-template-columns:1fr}.lia-shell .lia-variant-card{padding:12px;background:#f6f1fa;border-color:var(--lia-line);color:var(--lia-soft)}.lia-shell .lia-variant-card.active{border-color:#cbb5db;color:#75528f}.lia-shell .lia-compiler-head{display:block}.lia-shell .lia-compiler-head h3{font-size:14px}.lia-shell .lia-compiler-head p{font-size:11px}.lia-shell .lia-compiler-head button{margin-top:10px}
+        @container pocket (min-width:700px){.lia-shell .lia-bilingual-result,.lia-shell .lia-spec-field-grid{grid-template-columns:1fr 1fr}.lia-shell .lia-variant-grid{grid-template-columns:repeat(3,1fr)}}
+
+        .lia-shell .lia-result-card:not([data-editor-section="persona"]) [data-editor-block="persona"],.lia-shell .lia-result-card:not([data-editor-section="prompt"]) [data-editor-block="prompt"],.lia-shell .lia-result-card:not([data-editor-section="evolution"]) [data-editor-block="evolution"],.lia-shell .lia-result-card:not([data-editor-section="audit"]) [data-editor-block="audit"],.lia-shell .lia-result-card:not([data-editor-section="history"]) [data-editor-block="history"]{display:none!important}
+        .lia-shell .lia-asset-config-panel{min-height:0;height:auto;align-self:start}.lia-shell .lia-asset-gallery{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.lia-shell .lia-asset-gallery-panel{padding:0;background:transparent}.lia-shell .lia-asset-card{padding:10px;border:0;border-radius:18px;background:white;gap:8px}.lia-shell .lia-asset-card-top strong{font-size:11px;overflow-wrap:anywhere}.lia-shell .lia-asset-card .lia-asset-thumb{aspect-ratio:1;min-height:0}.lia-shell .lia-asset-card .lia-asset-upload-inline{display:none}.lia-shell .lia-asset-card .lia-asset-meta small{font-size:10px;line-height:1.5}.lia-shell .lia-asset-actions{grid-template-columns:1fr}.lia-shell .lia-asset-actions button{font-size:10px;min-height:40px;padding:8px}
+        .lia-shell .lia-live-sync-panel>.lia-audit-head{display:flex;align-items:flex-start;gap:12px}.lia-shell .lia-live-sync-panel>.lia-audit-head>div{flex:1}.lia-shell .lia-live-sync-panel>.lia-audit-head>strong{flex-shrink:0;border-radius:20px;background:#eee5f6;color:#896aa3;padding:4px 8px;font-size:11px}.lia-shell .lia-realtime-hero{margin-bottom:16px}
+        @container pocket (min-width:700px){.lia-shell .lia-asset-gallery{grid-template-columns:repeat(3,minmax(0,1fr))}}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root{color:var(--lia-text);font-family:inherit;font-size:12px}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root .mscx-card{background:white;border:0;border-radius:22px;padding:20px;gap:16px}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root h3{font-size:24px;font-weight:650;letter-spacing:-1px}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root .muted{color:var(--lia-muted);font-size:11px;line-height:1.7}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root :is(.scope,.status,.result,.job){background:#f6f1fa;border-color:#e8dfef;border-radius:14px;color:var(--lia-soft);font-size:11px;overflow-wrap:anywhere}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root label.mode{background:#fbf9fd;border-color:#e8dfef;border-radius:15px;padding:14px}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root label.mode:has(input:checked){background:#eee5f6;border-color:#c9b5da}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root label.mode small{font-size:11px;color:var(--lia-muted)}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root input{accent-color:#9676b4}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root input:is([type=text],[type=password]){background:#faf7fc;color:var(--lia-text);border-color:#e4daec;border-radius:12px;font-size:12px}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root button{background:#f1eaf7;color:#7c6194;border:0;border-radius:12px;font-size:11px;font-weight:500;min-height:42px}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root button.primary{background:#8870af;color:white}
+        #liaMemorySuiteServerConnectionPanel .mscx-scope-root button.danger{background:#fff1f4;color:#ac4965}
       </style>
       <main class="lia-shell">
-        <header class="lia-header">
-          <div class="lia-brand-main">
-            <div class="lia-brand-icon" aria-hidden="true">${htmlEscape(PLUGIN_ICON)}</div>
-            <div class="lia-brand-text">
-              <h1 class="lia-brand-title">${htmlEscape(PLUGIN_NAME)} <span style="color:var(--lia-muted);font-weight:650;font-size:.7em">Persona Studio</span></h1>
-              <p class="lia-brand-subtitle">세계관을 읽고, 기존 페르소나를 재해석하거나 새로운 페르소나를 창작합니다.</p>
-            </div>
-          </div>
-          <div class="lia-header-actions">
-            <button id="dpg-persona-panel-toggle" type="button">페르소나</button>
-            <button id="dpg-refresh" type="button">새로고침</button>
-            <button id="dpg-close" type="button">닫기</button>
-          </div>
-        </header>
+        ${renderPocketHeader()}
         <div id="dpg-status" data-tone="info"><span class="lia-status-dot"></span><span>초기화 중...</span></div>
         <div id="dpg-preview-root"></div>
       </main>
     `;
 
+    document.querySelectorAll(".lia-header-actions button").forEach(button => button.addEventListener("click", () => { const menu = document.querySelector(".lia-pocket-menu"); if (menu) menu.open = false; }));
     bindPersistentDebugExportControls(document.getElementById("dpg-preview-root"));
 
     document.getElementById("dpg-persona-panel-toggle")?.addEventListener("click", () => {
@@ -21222,7 +25323,9 @@ ${revisionText}`);
       const layout = document.querySelector(".lia-app-layout");
       layout?.classList.toggle("world-drawer-open", preservedWorldDrawerOpen);
       layout?.classList.toggle("persona-panel-open", preservedPersonaPanelOpen);
+      syncPocketPersonaDialog(preservedPersonaPanelOpen);
     });
+    document.getElementById("dpg-pocket-width")?.addEventListener("click", () => document.querySelector(".lia-shell")?.classList.toggle("pocket-wide"));
     document.getElementById("dpg-refresh")?.addEventListener("click", async () => {
       await refreshPreview();
     });
@@ -21230,11 +25333,152 @@ ${revisionText}`);
     await refreshPreview();
   }
 
-  async function unregisterUiRegistration(handle, methodNames, fallbackArgumentLists = []) {
+  async function activateLegacyLiveSyncBackendAfterSilentV3(health = {}) {
+    if (pluginUnloaded || liveSyncCaptureBackend !== LIVE_SYNC_CAPTURE_BACKENDS.CHAT_OUTPUT_V3) return false;
+    try {
+      if (liveSyncOutputListener && typeof api.removeRisuChatListener === "function") {
+        await api.removeRisuChatListener("output", liveSyncOutputListener);
+      }
+    } catch (_) {}
+    liveSyncOutputListener = null;
+    liveSyncCaptureSilentFailovers += 1;
+    liveSyncCaptureFallbackReason = `${liveSyncCaptureFallbackReason ? `${liveSyncCaptureFallbackReason};` : ""}runtime_failover:chat_output_registered_but_silent`;
+    let activated = false;
+    if (typeof api.addRisuScriptHandler === "function") {
+      try {
+        liveSyncLegacyOutputHandler = (content) => {
+          if (pluginUnloaded) return content;
+          liveSyncCaptureObservedRuns += 1;
+          liveSyncCaptureLastEventAt = Date.now();
+          const target = recentLiveSyncRequestTarget();
+          scheduleLivePersonaSyncCheck(LIVE_SYNC_OUTPUT_COALESCE_MS, {
+            target,
+            scopeKey: target?.scopeKey || "",
+            reason: "legacy_script_output",
+          });
+          return content;
+        };
+        const registration = await api.addRisuScriptHandler("output", liveSyncLegacyOutputHandler);
+        if (registration === false) throw new Error("addRisuScriptHandler returned false");
+        liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.SCRIPT_OUTPUT_LEGACY;
+        activated = true;
+      } catch (error) {
+        liveSyncLegacyOutputHandler = null;
+        liveSyncCaptureFallbackReason = `${liveSyncCaptureFallbackReason};runtime_legacy_script_registration_failed:${String(error?.message || error)}`;
+      }
+    }
+    if (!activated && personaProofHooksEnabled) {
+      liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.AFTER_REQUEST_RECONCILE;
+      activated = true;
+    }
+    if (!activated) liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.NONE;
+    liveSyncCaptureHealthPending = null;
+    const target = normalizeLiveSyncTarget(health?.target || recentLiveSyncRequestTarget() || {});
+    scheduleLivePersonaSyncCheck(0, {
+      target,
+      scopeKey: target?.scopeKey || health?.scopeKey || "",
+      reason: "chat_output_silent_failover_reconcile",
+      force: true,
+    });
+    appendDebugLog("live_sync_capture", "silent_backend_failover", {
+      health,
+      capture: liveSyncCaptureBackendSnapshot(),
+    }, activated ? "warn" : "error");
+    return activated;
+  }
+
+  async function maybeFailoverSilentLiveSyncBackend() {
+    if (liveSyncCaptureBackend !== LIVE_SYNC_CAPTURE_BACKENDS.CHAT_OUTPUT_V3 || !liveSyncCaptureHealthPending) return false;
+    liveSyncCaptureHealthChecks += 1;
+    const health = { ...liveSyncCaptureHealthPending };
+    if (liveSyncCaptureObservedRuns > Number(health.observedRunsAtAfter || 0)) {
+      liveSyncCaptureHealthPending = null;
+      return false;
+    }
+    return await activateLegacyLiveSyncBackendAfterSilentV3(health);
+  }
+
+  async function registerLiveSyncCaptureBackend() {
+    liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.NONE;
+    liveSyncCaptureFallbackReason = "";
+    if (pluginUnloaded) return false;
+
+    if (typeof api.addRisuChatListener === "function") {
+      try {
+        liveSyncOutputListener = (event) => {
+          if (pluginUnloaded) return;
+          liveSyncCaptureObservedRuns += 1;
+          liveSyncCaptureLastEventAt = Date.now();
+          liveSyncCaptureHealthPending = null;
+          Promise.resolve().then(() => processLiveSyncChatOutputEvent(event)).catch((error) => {
+            appendDebugLog("live_sync_capture", "chat_output_worker_failed", { error: errorForLog(error) }, "error");
+          });
+        };
+        const registration = await api.addRisuChatListener("output", liveSyncOutputListener);
+        if (registration === false) throw new Error("addRisuChatListener returned false");
+        liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.CHAT_OUTPUT_V3;
+        appendDebugLog("live_sync_capture", "backend_registered", liveSyncCaptureBackendSnapshot(), "info");
+        return true;
+      } catch (error) {
+        liveSyncOutputListener = null;
+        liveSyncCaptureFallbackReason = `chat_output_registration_failed:${String(error?.message || error)}`;
+        appendDebugLog("live_sync_capture", "chat_output_registration_failed", { error: errorForLog(error) }, "warn");
+      }
+    } else {
+      liveSyncCaptureFallbackReason = "addRisuChatListener_unavailable";
+    }
+
+    if (typeof api.addRisuScriptHandler === "function") {
+      try {
+        liveSyncLegacyOutputHandler = (content) => {
+          if (pluginUnloaded) return content;
+          liveSyncCaptureObservedRuns += 1;
+          liveSyncCaptureLastEventAt = Date.now();
+          const target = recentLiveSyncRequestTarget();
+          scheduleLivePersonaSyncCheck(LIVE_SYNC_OUTPUT_COALESCE_MS, {
+            target,
+            scopeKey: target?.scopeKey || "",
+            reason: "legacy_script_output",
+          });
+          return content;
+        };
+        const registration = await api.addRisuScriptHandler("output", liveSyncLegacyOutputHandler);
+        if (registration === false) throw new Error("addRisuScriptHandler returned false");
+        liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.SCRIPT_OUTPUT_LEGACY;
+        appendDebugLog("live_sync_capture", "backend_registered", liveSyncCaptureBackendSnapshot(), "info");
+        return true;
+      } catch (error) {
+        liveSyncLegacyOutputHandler = null;
+        liveSyncCaptureFallbackReason = `${liveSyncCaptureFallbackReason ? `${liveSyncCaptureFallbackReason};` : ""}legacy_script_output_registration_failed:${String(error?.message || error)}`;
+        appendDebugLog("live_sync_capture", "legacy_output_registration_failed", { error: errorForLog(error) }, "warn");
+      }
+    } else {
+      liveSyncCaptureFallbackReason = `${liveSyncCaptureFallbackReason ? `${liveSyncCaptureFallbackReason};` : ""}addRisuScriptHandler_unavailable`;
+    }
+
+    liveSyncCaptureBackend = personaProofHooksEnabled
+      ? LIVE_SYNC_CAPTURE_BACKENDS.AFTER_REQUEST_RECONCILE
+      : LIVE_SYNC_CAPTURE_BACKENDS.NONE;
+    if (!personaProofHooksEnabled) {
+      liveSyncCaptureFallbackReason = `${liveSyncCaptureFallbackReason ? `${liveSyncCaptureFallbackReason};` : ""}afterRequest_replacer_unavailable`;
+    }
+    appendDebugLog("live_sync_capture", "backend_registered", liveSyncCaptureBackendSnapshot(), liveSyncCaptureBackend === LIVE_SYNC_CAPTURE_BACKENDS.NONE ? "warn" : "info");
+    return liveSyncCaptureBackend !== LIVE_SYNC_CAPTURE_BACKENDS.NONE;
+  }
+
+  async function unregisterUiRegistration(handle, stableId, methodNames, fallbackArgumentLists = []) {
+    if (stableId && typeof api?.unregisterUIPart === 'function') {
+      try {
+        await api.unregisterUIPart(stableId);
+        return true;
+      } catch (error) {
+        appendDebugLog('lifecycle', 'ui_unregister_part_failed', { stableId, error: errorForLog(error) }, 'warn');
+      }
+    }
     try {
       if (await disposeRegistrationHandle(handle)) return true;
     } catch (error) {
-      appendDebugLog('lifecycle', 'ui_registration_handle_dispose_failed', { error: errorForLog(error) }, 'warn');
+      appendDebugLog('lifecycle', 'ui_registration_handle_dispose_failed', { stableId, error: errorForLog(error) }, 'warn');
     }
     for (const method of methodNames) {
       if (typeof api?.[method] !== 'function') continue;
@@ -21260,11 +25504,13 @@ ${revisionText}`);
     registeredButtonDescriptor = null;
     const settingRemoved = await unregisterUiRegistration(
       settingHandle,
+      LIA_SETTING_UI_ID,
       ['unregisterSetting', 'removeSetting'],
       [[PLUGIN_DISPLAY_NAME, openUI], [PLUGIN_DISPLAY_NAME]],
     );
     const buttonRemoved = await unregisterUiRegistration(
       buttonHandle,
+      LIA_BUTTON_UI_ID,
       ['unregisterButton', 'removeButton'],
       [[buttonDescriptor, openUI], [PLUGIN_DISPLAY_NAME, openUI], [PLUGIN_DISPLAY_NAME]],
     );
@@ -21274,6 +25520,10 @@ ${revisionText}`);
   async function handlePluginUnload() {
     if (pluginUnloaded) return;
     pluginUnloaded = true;
+    const registeredUnloadHandler = unloadEventHandler;
+    const registeredUnloadRegistration = unloadEventRegistration;
+    unloadEventHandler = null;
+    unloadEventRegistration = null;
     appendDebugLog("lifecycle", "plugin_unload", { version: PLUGIN_VERSION }, "info");
     try { await persistLogStore(); } catch (_) {}
     if (logPersistTimer) clearTimeout(logPersistTimer);
@@ -21281,14 +25531,25 @@ ${revisionText}`);
     if (debugExportSnapshotRefreshTimer) clearTimeout(debugExportSnapshotRefreshTimer);
     debugExportSnapshotRefreshTimer = null;
     revokeVisualAssetObjectUrls();
-    if (liveSyncOutputDebounce) clearTimeout(liveSyncOutputDebounce);
-    liveSyncOutputDebounce = null;
+    for (const entry of liveSyncScheduledChecks.values()) {
+      if (entry?.timer) clearTimeout(entry.timer);
+    }
+    liveSyncScheduledChecks.clear();
+    liveSyncRequeueByScope.clear();
+    liveSyncOutputTurnRevisions.clear();
+    liveSyncInFlightScopes.clear();
+    liveSyncCaptureHealthPending = null;
     try { await unregisterLiaHandoffIpc(); } catch (_) {}
     try { await unregisterLiaUiRegistrations(); } catch (_) {}
     try {
       if (liveSyncOutputListener && typeof api.removeRisuChatListener === "function") await api.removeRisuChatListener("output", liveSyncOutputListener);
     } catch (_) {}
+    try {
+      if (liveSyncLegacyOutputHandler && typeof api.removeRisuScriptHandler === "function") await api.removeRisuScriptHandler("output", liveSyncLegacyOutputHandler);
+    } catch (_) {}
     liveSyncOutputListener = null;
+    liveSyncLegacyOutputHandler = null;
+    liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.NONE;
     try {
       if (personaProofBeforeReplacer && typeof api.removeRisuReplacer === "function") await api.removeRisuReplacer("beforeRequest", personaProofBeforeReplacer);
       if (personaProofAfterReplacer && typeof api.removeRisuReplacer === "function") await api.removeRisuReplacer("afterRequest", personaProofAfterReplacer);
@@ -21297,8 +25558,17 @@ ${revisionText}`);
     personaProofAfterReplacer = null;
     personaProofHooksEnabled = false;
     try { await disposePersonaProofMainBadge(); } catch (_) {}
-    unloadEventHandler = null;
-    unloadEventRegistration = null;
+    try { await MemorySuiteLiaComputeBridge.dispose?.(); } catch (_) {}
+    try { await MemorySuiteStorageBridge.dispose?.(); } catch (_) {}
+    try {
+      const disposed = await disposeRegistrationHandle(registeredUnloadRegistration);
+      if (!disposed && registeredUnloadHandler) {
+        for (const method of ['removeEventListener', 'unregisterEventListener']) {
+          if (typeof api?.[method] !== 'function') continue;
+          try { await api[method]('unload', registeredUnloadHandler); break; } catch (_) {}
+        }
+      }
+    } catch (_) {}
     try {
       const currentRuntime = globalThis[LIA_RUNTIME_INSTANCE_KEY];
       if (currentRuntime?.token === liaRuntimeInstanceToken) delete globalThis[LIA_RUNTIME_INSTANCE_KEY];
@@ -21316,6 +25586,23 @@ ${revisionText}`);
       token: liaRuntimeInstanceToken,
       version: PLUGIN_VERSION,
       dispose: async () => { try { await handlePluginUnload(); } catch (_) {} },
+      getHostLineageStatus: async () => { const ctx = await getLiveRuntimeContext(); const binding = await readLivePersonaBindingByScopeKey(livePersonaScopeKey(ctx)); return { ...MemorySuiteHostLineage.inspect(ctx.char, ctx.chat), owner: 'lia', scopeKey: livePersonaScopeKey(ctx), nativeBranchState: binding?.nativeBranchState || null }; },
+      debugProjectNativeBranchPersonaState: (ctx, binding) => projectNativeBranchPersonaState(ctx, normalizeLivePersonaBinding(binding)),
+      getLiveSyncCaptureState: () => sanitizeLogValue(liveSyncCaptureBackendSnapshot()),
+      debugProcessChatOutput: (event) => processLiveSyncChatOutputEvent(event),
+      debugScheduleLiveSync: (options = {}) => scheduleLivePersonaSyncCheck(0, options),
+      debugCaptureLiveSyncBatch: async (options = {}) => {
+        const runtimeCtx = await getLiveRuntimeContextForTarget(options.target || null);
+        const pairs = collectCompletedTurnPairs(runtimeCtx.chat);
+        const startPair = Math.max(1, Number(options.startPair || 1) || 1);
+        const batch = pairs.slice(startPair - 1, startPair - 1 + LIVE_SYNC_BATCH_SIZE);
+        return sanitizeLogValue(livePersonaBatchRevisionSnapshot(runtimeCtx, batch, options.outputCapture || null));
+      },
+      debugVerifyLiveSyncBatch: async (snapshot = {}) => sanitizeLogValue(await verifyLivePersonaBatchStillCurrent(snapshot)),
+      debugWorldLoreComputeLocal: (input = {}) => runLiaWorldLoreComputeLocal(input),
+      debugRerankWorldLoreWithCompute: (entries = [], ctx = {}, topK = WORLD_LORE_TOP_K) => rerankWorldLoreEntriesWithCompute(entries, ctx, topK),
+      debugWorldLoreComputeWhenIdle: () => MemorySuiteLiaComputeBridge.whenIdle(),
+      debugWorldLoreComputeStatus: () => sanitizeLogValue(MemorySuiteLiaComputeBridge.status()),
     };
   } catch (_) {}
 
@@ -21323,12 +25610,13 @@ ${revisionText}`);
   try { preservedVisualAssetPresetStore = await readVisualAssetPresetStore(); } catch (_) { preservedVisualAssetPresetStore = normalizeVisualAssetPresetStore(); }
   appendOperationLog("plugin_start", `${PLUGIN_DISPLAY_NAME} v${PLUGIN_VERSION} 시작`, {}, "info");
   appendDebugLog("lifecycle", "plugin_start", { version: PLUGIN_VERSION }, "info");
-  registeredSettingHandle = await api.registerSetting?.(PLUGIN_DISPLAY_NAME, openUI, PLUGIN_ICON, "html");
+  registeredSettingHandle = await api.registerSetting?.(PLUGIN_DISPLAY_NAME, openUI, PLUGIN_ICON, "html", LIA_SETTING_UI_ID);
   registeredButtonDescriptor = {
     name: PLUGIN_DISPLAY_NAME,
     icon: PLUGIN_ICON,
     iconType: "html",
     location: "hamburger",
+    id: LIA_BUTTON_UI_ID,
   };
   registeredButtonHandle = await api.registerButton?.(registeredButtonDescriptor, openUI);
   try { await migrateLegacyLivePersonaDisplayNames(); } catch (error) {
@@ -21337,7 +25625,8 @@ ${revisionText}`);
   let startupCtx = null;
   try {
     startupCtx = await getLiveRuntimeContext();
-    await readLivePersonaBindingByScopeKey(livePersonaScopeKey(startupCtx));
+    const startupBinding = await readLivePersonaBindingByScopeKey(livePersonaScopeKey(startupCtx));
+    if (startupBinding?.pendingBindingChange) await resumeLivePersonaBindingChange(startupCtx, startupBinding);
   } catch (_) {}
   try { await registerLiaHandoffIpc(); } catch (_) {}
   try {
@@ -21345,18 +25634,19 @@ ${revisionText}`);
     if (inherited?.adopted) startupCtx = await getLiveRuntimeContext();
   } catch (_) {}
   try { await initializePersonaProofExperience(startupCtx); } catch (_) {}
+  try { await registerLiveSyncCaptureBackend(); } catch (error) {
+    liveSyncCaptureBackend = LIVE_SYNC_CAPTURE_BACKENDS.NONE;
+    liveSyncCaptureFallbackReason = `capture_backend_registration_failed:${String(error?.message || error)}`;
+    appendDebugLog("live_sync_capture", "backend_registration_failed", { error: errorForLog(error) }, "error");
+  }
+  // v0.26.49: official lifecycle first. Some old forks expose addEventListener instead.
   try {
-    if (typeof api.addRisuChatListener === "function") {
-      liveSyncOutputListener = () => { scheduleLivePersonaSyncCheck(650); };
-      await api.addRisuChatListener("output", liveSyncOutputListener);
-    }
-  } catch (_) { liveSyncOutputListener = null; }
-  // v0.26.39: no unconditional Live Sync polling interval.
-  try {
-    if (typeof api.addEventListener === "function") {
-      unloadEventHandler = handlePluginUnload;
+    unloadEventHandler = handlePluginUnload;
+    if (typeof api.onUnload === "function") {
+      unloadEventRegistration = await api.onUnload(unloadEventHandler);
+    } else if (typeof api.addEventListener === "function") {
       unloadEventRegistration = await api.addEventListener("unload", unloadEventHandler);
     }
   } catch (_) {}
-await api.log?.(`${PLUGIN_NAME}: ${PLUGIN_SUBTITLE} loaded`);
+  console.log(`${PLUGIN_NAME}: ${PLUGIN_SUBTITLE} loaded`);
 })();
