@@ -1,7 +1,45 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.26.68
+//@version 0.26.75
+/* Target-only handoff storage preparation v1. Authenticated owner handlers only. */
+async function prepareMemorySuiteHandoffTargetStorage(api, storage, owner, payload) {
+  const readTarget = async () => {
+    const character = await api.getCharacter();
+    let index = Number(character?.chatPage || 0);
+    if (typeof api.getCurrentChatIndex === 'function') index = Number(await api.getCurrentChatIndex());
+    const chat = character?.chats?.[index];
+    const marker = chat?.memorySessionBridge;
+    const target = String(chat?.id || chat?.chatId || chat?.uuid || '');
+    const policy = marker?.targetStoragePolicy;
+    if (!target || target !== payload.targetChatId || marker?.targetChatId !== target
+      || !payload.transferId || marker?.transferId !== payload.transferId
+      || !marker.sourceChatId || marker.sourceChatId === target
+      || marker.targetStorageMode !== payload.mode
+      || !['plugin_only','mirror','server_only'].includes(payload.mode)
+      || !policy?.participants?.some(p => p.owner === owner && p.mode === payload.mode)
+      || marker.handoffJournal?.transferId !== payload.transferId
+      || marker.handoffJournal?.state === 'completed') throw Error('HANDOFF_TARGET_STORAGE_IDENTITY_INVALID');
+    return target;
+  };
+  const target = await readTarget();
+  const before = await storage.getConnectionSettings({ force:true });
+  const scope = before.scope;
+  if (!scope?.scopeId || String(scope.chatId || scope.canonicalChatId || '') !== target) throw Error('HANDOFF_TARGET_STORAGE_SCOPE_MISMATCH');
+  if (before.recoveryRequired) throw Error('HANDOFF_TARGET_STORAGE_RECOVERY_REQUIRED');
+  if (before.mode !== payload.mode) {
+    // Only a new/local route may be prepared; never convert an unrelated server route.
+    if (before.mode !== 'plugin_only') throw Error('HANDOFF_TARGET_STORAGE_MODE_CONFLICT');
+    await readTarget();
+    await storage.setScopeMode(scope, payload.mode);
+  }
+  await readTarget();
+  const after = await storage.getConnectionSettings({ scope, force:true });
+  if (after.mode !== payload.mode || after.scope?.scopeId !== scope.scopeId || after.recoveryRequired) throw Error('HANDOFF_TARGET_STORAGE_READBACK_FAILED');
+  return { schema:'memory-suite.target-storage-preparation.v1', owner, targetChatId:target, transferId:payload.transferId, mode:after.mode, scope:after.scope, verified:true };
+}
+/* End target-only handoff storage preparation */
+
 /* v0.26.66 / Pocket Studio: light responsive home, grouped bottom navigation, preserved persona and storage actions. */
 /* v0.26.62 requires semantic Persona name/prompt readback and rejects explicit host write failures before committing Live Persona progress. */
 /* Core-quality patch: Lore Reranker v2 replaces flat substring weighting with exact-anchor + rare-term BM25F-style scoring and splits protected lore into hard constraints (always retained) versus soft always/constant lore (budgeted inside Top-K). */
@@ -110,7 +148,7 @@
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-const PLUGIN_VERSION = "0.26.68";
+const PLUGIN_VERSION = "0.26.75";
   const LIA_SETTING_UI_ID = "lia-persona-linker-setting";
   const LIA_BUTTON_UI_ID = "lia-persona-linker-button";
   const PERSONA_PROOF_VERSION = 1;
@@ -1299,7 +1337,7 @@ function createMemorySuiteHostLineage() {
 /* END LIBRARIAN HOST LINEAGE SDK */
 const MemorySuiteHostLineage = createMemorySuiteHostLineage();
 
-/* LIBRARIAN SYSTEM STORAGE SDK v1.8.16
+/* LIBRARIAN SYSTEM STORAGE SDK v1.8.19
  * Scope-routed durable storage client shared by Flashback, HAYAKU, LIBRA, LIA and RE:TRACE.
  * The server stores opaque values. Each plugin keeps ownership of its own data schema.
  */
@@ -1710,12 +1748,37 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     ? '미러'
     : (mode === MODE_SERVER_ONLY ? '서버 단독' : '플러그인 단독');
 
+  let resetChoice = null;
+  let resetReloadRequired = false;
+  const resetChoiceKey = 'memory_suite_reset_choice.' + namespace;
+  const readResetChoice = async () => {
+    const store = state.legacy.plugin;
+    if(!store?.getItem)return null;
+    const value=await store.getItem(resetChoiceKey);
+    try { resetChoice=typeof value==='string'?JSON.parse(value):value; } catch(_){resetChoice=null;}
+    if(resetChoice && resetChoice.url!==(await readConfig()).url)resetChoice=null;
+    return resetChoice;
+  };
+  const acceptServerReset = async choice => {
+    if(!['empty','upload'].includes(choice))throw new Error('reset_choice_invalid');
+    const connection=await bootstrap(true,true);
+    const epoch=Number(connection.resetEpochs?.[namespace]||0);
+    if(!epoch)throw new Error('server_has_not_been_reset');
+    const value={epoch,url:connection.requestedUrl||connection.url,choice};
+    const store=state.legacy.plugin;
+    if(!store?.setItem||!store?.getItem)throw new Error('reset_preference_storage_unavailable');
+    if(await store.setItem(resetChoiceKey,JSON.stringify(value))===false)throw new Error('reset_preference_write_failed');
+    const actual=await readResetChoice();
+    if(JSON.stringify(actual)!==JSON.stringify(value))throw new Error('reset_preference_readback_failed');
+    resetReloadRequired=true;
+    return {ok:true,reloadRequired:true,choice};
+  };
   const normalizeServerUrl = rawValue => {
     const raw = String(rawValue || defaultUrl).trim().replace(/\/+$/, '') || defaultUrl;
     try {
       const parsed = new URL(raw);
-      const host = String(parsed.hostname || '').toLowerCase();
-      if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(host)) {
+      const host = String(parsed.hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+      if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1', 'host.docker.internal'].includes(host)) {
         throw new Error('server_url_must_be_loopback_http');
       }
       return parsed.origin;
@@ -1894,8 +1957,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       if (payload.capabilities?.[capability] !== true) throw new Error(`memory_suite_capability_missing:${capability}`);
     }
     return {
+      resetEpochs: payload.resetEpochs || {},
       requestedUrl: requestedUrl || '',
-      url: String(payload.url).replace(/\/+$/, ''),
+      url: String(requestedUrl || payload.url).replace(/\/+$/, ''),
       token: String(payload.token),
       version: String(payload.version || ''),
       protocol: payload.protocol || {},
@@ -1929,6 +1993,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${connection.token}`,
+        'X-Memory-Suite-Reset-Epochs': JSON.stringify(connection.resetEpochs || {}),
           'X-Memory-Suite-Plugin': pluginId,
           'X-Memory-Suite-Plugin-Version': pluginVersion
         }
@@ -2014,6 +2079,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const request = async (method, route, body = null, requestOptions = {}) => {
     const connection = await bootstrap(requestOptions.forceBootstrap === true, requestOptions.allowPluginOnly === true);
     if (!connection) throw new Error('memory_suite_server_not_enabled');
+    const resetEpoch=Number(connection.resetEpochs?.[namespace]||0);
+    if(resetEpoch && !route.startsWith('/v1/manager/')){
+      const choice=await readResetChoice();
+      if(resetReloadRequired || choice?.epoch!==resetEpoch || choice?.url!==(connection.requestedUrl||connection.url)){
+        throw new Error('서버 자료가 초기화 또는 복원되었습니다. 서버 연결 설정에서 서버 자료 사용 또는 로컬 기억 다시 업로드를 선택한 뒤 RisuAI를 새로고침하세요.');
+      }
+    }
     const requestScope = requestOptions.scope && typeof requestOptions.scope === 'object'
       ? requestOptions.scope
       : state.scopeRouting.current;
@@ -2025,6 +2097,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       method,
       headers: {
         Authorization: `Bearer ${connection.token}`,
+        'X-Memory-Suite-Reset-Epochs': JSON.stringify(connection.resetEpochs || {}),
         'X-Memory-Suite-Plugin': pluginId,
         'X-Memory-Suite-Plugin-Version': pluginVersion,
         ...(requestScopeId ? { 'X-Memory-Suite-Scope-Id': encodeURIComponent(requestScopeId) } : {}),
@@ -3783,7 +3856,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const root = document.createElement('div');
     root.id = managementRootId;
     root.innerHTML = `<style>
-      #${managementRootId}{position:fixed;inset:0;z-index:2147483000;background:rgba(4,8,15,.72);display:flex;align-items:center;justify-content:center;padding:18px}
+      #${managementRootId}{position:fixed;inset:0;z-index:28;background:rgba(4,8,15,.72);display:flex;align-items:center;justify-content:center;padding:18px}
       #${managementRootId} .ms-dialog-card{width:min(820px,100%);max-height:94vh;overflow:auto;background:#101827;border:1px solid #334155;border-radius:17px;padding:18px;box-shadow:0 24px 80px rgba(0,0,0,.48)}
       #${managementRootId} .ms-dialog-close{display:flex;justify-content:flex-end;margin-top:12px} #${managementRootId} .ms-dialog-close button{padding:9px 14px;border:1px solid #475569;border-radius:9px;background:#1e293b;color:#eef3ff;cursor:pointer;font-weight:700}
     </style><div class="ms-dialog-card"><div data-ms-dialog-panel></div><div class="ms-dialog-close"><button data-ms-dialog-close type="button">닫기</button></div></div>`;
@@ -4192,7 +4265,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (!scopeInput || scope.scopeId === state.scopeRouting.current?.scopeId) registry = await maybeImportLegacyGlobalMode(scope, registry);
     const stored = registry.entries[scope.scopeId];
     const transient = state.scopeRouting.transientModes.get(scope.scopeId);
-    const mode = VALID_MODES.has(transient) ? transient : normalizeMode(stored?.mode || MODE_PLUGIN_ONLY);
+    const choice=await readResetChoice();
+    const mode = choice?.choice==='empty' ? MODE_SERVER_ONLY : VALID_MODES.has(transient) ? transient : normalizeMode(stored?.mode || MODE_PLUGIN_ONLY);
     return { scope: stored ? normalizeScopeDescriptor(stored, scope.scopeId) : scope, mode, modeLabel: modeLabel(mode), explicit: !!stored };
   };
   const scopeExecutionPolicyFromModeState = modeState => {
@@ -4378,6 +4452,10 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (currentMode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
     const route = await resolveScopedRoute(space, key);
     if (!route.routed || route.mode === MODE_PLUGIN_ONLY) return typeof legacyGet === 'function' ? await legacyGet() : null;
+    if(resetChoice?.choice==='empty'){
+      const row=await remoteGet(space,route.remoteKey,{allowPluginOnly:true});
+      return row.exists===true?await routeMergeValue(route,row.value,null):null;
+    }
     if (flashbackWriterAlias(route.remoteKey)) {
       // Server-selected Flashback corpora never accept a local-ahead mirror as
       // canonical. Import only an absent server key, under the writer fence.
@@ -4655,6 +4733,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   };
 
   const scopedSynchronizeSpace = async (legacy, space = 'plugin', syncOptions = {}) => {
+    if((await readResetChoice())?.choice==='empty')throw new Error('서버 자료 사용 모드에서는 기존 로컬 기억을 자동 업로드하지 않습니다. 로컬 기억 다시 업로드를 명시적으로 선택하세요.');
     if (!legacy) throw new Error('memory_suite_pluginstorage_unavailable');
     const scope = normalizeScopeDescriptor(syncOptions.scope || await resolveCurrentScope(true));
     if (!scope.scopeId) throw new Error('memory_suite_current_scope_unavailable');
@@ -5195,6 +5274,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const scopedSetModeSafely = async (requestedMode, operationOptions = {}) => {
     const target = normalizeMode(requestedMode);
+    if ((await readResetChoice())?.choice === 'empty' && target !== MODE_SERVER_ONLY) throw new Error('reset_empty_mode_locked: select local upload and reload before changing storage mode');
     const scope = normalizeScopeDescriptor(operationOptions.scope || await resolveCurrentScope(true));
     const recoveryLock = await recoveryLockForScope(scope);
     if (recoveryLock && target !== MODE_SERVER_ONLY) throw recoveryRequiredError(scope, recoveryLock, `set_mode_${target}`);
@@ -5562,9 +5642,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           <label class="mode"><input type="radio" name="${rootId}-mode" value="server_only"><span><b>서버 단독</b><br><small>${integratesCompute ? '서버를 영구 정본으로 사용하고 서버에서 우선 연산합니다. 연산 실패는 로컬로 복귀합니다.' : '현재 스코프의 영구 정본을 Librarian System DATA에 저장합니다.'}</small></span></label>
         </div>
         <div class="scope" data-mode-summary${integratesCompute ? '' : ' hidden'}></div>
-        <label data-server-fields><b>서버 주소</b><input data-url type="text" value="${esc(initial.url)}"></label>
+        <p>Docker는 host.docker.internal 주소를 입력할 수 있습니다. PocketRisu의 /proxy2 경유 요청은 PocketRisu 서버에서 출발합니다. localhost는 그 서버 또는 컨테이너 자신입니다. 백엔드가 실행 중인 위치와 접근 경로를 확인하세요.</p><label data-server-fields><b>서버 주소</b><input data-url type="text" value="${esc(initial.url)}"></label>
         <div class="actions"><button data-test>연결 테스트</button><button class="primary" data-apply>설정 적용</button><button data-sync>지금 동기화</button><button data-restore>서버 → pluginStorage 복구</button><button class="danger" data-delete>현재 스코프 pluginStorage 삭제</button></div>
-        <div class="status" data-status>${integratesCompute ? `현재 방식: ${esc(initial.modeLabel)}\n연산: ${initial.executionPolicy?.computeMode === 'prefer_server' ? '서버 우선 · 실패 시 로컬' : '로컬'}` : `현재 모드: ${esc(initial.modeLabel)}\n서버 상태를 확인할 수 있습니다.`}</div>
+        <div class="actions"><button data-reset-empty>서버 자료 사용 · 로컬 업로드 안 함</button><button data-reset-upload>초기화 후 로컬 기억 다시 업로드</button></div><div class="status" data-status>${integratesCompute ? `현재 방식: ${esc(initial.modeLabel)}\n연산: ${initial.executionPolicy?.computeMode === 'prefer_server' ? '서버 우선 · 실패 시 로컬' : '로컬'}` : `현재 모드: ${esc(initial.modeLabel)}\n서버 상태를 확인할 수 있습니다.`}</div>
       </div>
       <div class="job" data-job><b data-job-title>작업 진행 중</b><div class="bar"><i data-job-bar></i></div><div class="grid"><span data-job-phase></span><span data-job-count></span><span data-job-bytes></span><span data-job-time></span><span data-job-retry></span><span data-job-key></span></div><div class="result" data-job-result></div><div class="actions" data-job-terminal-actions style="display:none"><button data-job-dismiss type="button">결과 확인 닫기</button></div></div>
     </div>`;
@@ -5618,6 +5698,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       if(terminal&&job.status==='completed'&&normalizeMode(job.targetMode)!==MODE_PLUGIN_ONLY&&computeProbeJobId!==job.jobId){computeProbeJobId=job.jobId;try{computeBridge?.scheduleProbe?.(0);}catch(_){}}
       if(terminal&&job.jobId!==terminalRefreshId){terminalRefreshId=job.jobId;scheduleLifecycleTimeout(()=>{void scopedGetConnectionSettings({scope:initial.scope,force:true}).then(settings=>applyRecoveryGuard(settings.recoveryRequired)).catch(()=>{});},0);}
     };
+    for(const [selector,choice] of [['[data-reset-empty]','empty'],['[data-reset-upload]','upload']]){
+      q(selector).onclick=async()=>{try{await acceptServerReset(choice);setMessage('선택을 저장했습니다. 기존 실행의 재업로드를 막기 위해 RisuAI를 새로고침한 뒤 사용하세요.','good');}catch(error){setMessage(error.message,'error');}};
+    }
     q('[data-test]').onclick = async()=>{ setMessage(integratesCompute?'Storage와 Compute 연결을 확인하고 있습니다…':'서버 연결을 확인하고 있습니다…'); const storageResult=await testConnection(q('[data-url]').value); let computeResult=null; if(integratesCompute&&storageResult.ok&&computeBridge?.probe){try{computeResult=await computeBridge.probe({force:true,reason:'integrated_connection_test'});}catch(error){computeResult={ok:false,error:compact(error?.message||error,300)};}} const storageLine=storageResult.ok?`${integratesCompute?'Storage: ':''}연결됨 · Librarian System ${storageResult.serverVersion} · 항목 ${storageResult.liveRecords}`:`${integratesCompute?'Storage: ':''}연결 실패 · ${storageResult.error}`; const computeLine=!integratesCompute?'':!storageResult.ok?'Compute: Storage 연결 실패로 확인하지 않음':computeResult?.ok?`Compute: 연결됨 · ${Number(computeResult.operations?.length||computeResult.operationCount||0)}개 연산`:`Compute: 연결 실패 · 연산 시 로컬 폴백 · ${computeResult?.error||computeResult?.reason||'unavailable'}`; setMessage([storageLine,computeLine].filter(Boolean).join('\n'),storageResult.ok&&(!integratesCompute||computeResult?.ok)?'good':storageResult.ok?'':'error'); };
     q('[data-apply]').onclick = async()=>{ const mode=root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value||MODE_PLUGIN_ONLY; try{const job=await scopedStartConnectionConfigurationJob({mode,url:q('[data-url]').value,scope:initial.scope}); setMessage('설정 적용과 현재 스코프 초기 동기화를 시작했습니다.'); renderJob(job);}catch(error){setMessage(`설정 적용 시작 실패\n${error?.message||error}`,'error');} };
     q('[data-sync]').onclick = async()=>{ try{const job=await scopedStartSynchronizationJob({scope:initial.scope});setMessage('현재 스코프 동기화를 시작했습니다.');renderJob(job);}catch(error){setMessage(`동기화 시작 실패\n${error?.userMessage||error?.message||error}`,'error');} };
@@ -5988,11 +6071,12 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const response = await managerRequest('POST', '/v1/manager/scope-delete/plan', payload || {});
     return response?.result || null;
   };
-  const managerExecuteScopeDeletion = async (planId, mutationFingerprint) => {
+  const managerExecuteScopeDeletion = async (planId, mutationFingerprint, options = {}) => {
     const connection = await managerConnection();
     if (connection?.capabilities?.['scope-delete-commit.v1'] !== true) throw new Error('memory_suite_scope_delete_commit_capability_missing');
     const response = await managerRequest('POST', '/v1/manager/scope-delete/execute', {
       planId: String(planId || ''),
+      statusOnly: options.statusOnly === true,
       mutationFingerprint: String(mutationFingerprint || '')
     });
     return response?.result || null;
@@ -6203,6 +6287,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     getCachedDiagnostics,
     decorateDebugExport,
     decorateDebugExportSync,
+    managerControl: async (action, body = {}) => {
+      const allowed=['status','backups','history','backup-create','backup-check','restore-plan','restore-execute'];
+      if(!allowed.includes(action))throw new Error('control_action_not_supported');
+      const connection=await managerConnection();
+      if(connection.capabilities?.['manager-control.v1']!==true)throw new Error('manager_control_server_upgrade_required');
+      return (await managerRequest(['status','backups','history'].includes(action)?'GET':'POST','/v1/manager/control/'+action,['status','backups','history'].includes(action)?null:body)).result;
+    },
     managerGetDiagnostics,
     managerConnection,
     managerServerGet,
@@ -6211,6 +6302,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     managerServerIntegrity,
     managerReplaceScopeIndex,
     managerListScopes,
+    acceptServerReset,
+    managerPlanReset: async namespaces => (await managerRequest('POST','/v1/manager/reset/plan',{namespaces})).result,
+    managerExecuteReset: async body => (await managerRequest('POST','/v1/manager/reset/execute',body)).result,
     managerPlanScopeDeletion,
     managerExecuteScopeDeletion,
     managerSetScopePinned,
@@ -6237,7 +6331,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
 };
 
-/* LIBRARIAN SYSTEM COMPUTE SDK v0.3.4
+/* LIBRARIAN SYSTEM COMPUTE SDK v0.3.5
  * Optional deterministic-compute client shared by Librarian System owner plugins.
  *
  * The plugin remains authoritative: local execution is always available, the
@@ -6297,8 +6391,8 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     const raw = String(rawValue || defaultUrl).trim().replace(/\/+$/, '') || defaultUrl;
     try {
       const parsed = new URL(raw);
-      const host = String(parsed.hostname || '').toLowerCase();
-      if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes(host)) {
+      const host = String(parsed.hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+      if (parsed.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1', 'host.docker.internal'].includes(host)) {
         throw new Error('server_url_must_be_loopback_http');
       }
       return parsed.origin;
@@ -11200,6 +11294,8 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
           };
         } else if (action === "inspect") {
           result = await inspectLiaForRetrace();
+        } else if (action === "memory_suite_prepare_handoff_target") {
+            result = await prepareMemorySuiteHandoffTargetStorage(getRuntimeApi(), MemorySuiteStorageBridge, 'lia', request.payload || {});
         } else if (action === "memory_suite_storage_status") {
           const connection = await MemorySuiteStorageBridge.getConnectionSettings({ force: true });
           const recovery = connection?.recoveryRequired && typeof connection.recoveryRequired === "object"
@@ -11271,6 +11367,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       try { await disposeRegistrationHandle(registration); } catch (_) {}
       return false;
     }
+    if (registration === false) return false;
     liaHandoffIpcHandler = handler;
     liaHandoffIpcRegistration = registration;
     liaHandoffIpcApi = ipcApi;
@@ -11292,7 +11389,26 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
     return false;
   }
 
+  let liaHandoffRetryTimer = null;
+  let liaHandoffRetryRunning = false;
+  let liaHandoffRetryAttempts = 0;
+  async function ensureLiaHandoffIpc() {
+    if (pluginUnloaded || liaHandoffRetryRunning || liaHandoffIpcRegistered) return;
+    liaHandoffRetryRunning = true;
+    liaHandoffRetryAttempts += 1;
+    try { await registerLiaHandoffIpc(); }
+    catch (error) { appendDebugLog('handoff', 'ipc_registration_failed', { error: errorForLog(error) }, 'warn'); }
+    finally {
+      liaHandoffRetryRunning = false;
+      if (!pluginUnloaded && !liaHandoffIpcRegistered && liaHandoffRetryAttempts < 60 && liaHandoffRetryTimer === null) {
+        liaHandoffRetryTimer = setTimeout(() => { liaHandoffRetryTimer = null; void ensureLiaHandoffIpc(); }, 500);
+      }
+    }
+  }
+
   async function unregisterLiaHandoffIpc() {
+    if (liaHandoffRetryTimer !== null) clearTimeout(liaHandoffRetryTimer);
+    liaHandoffRetryTimer = null;
     const handler = liaHandoffIpcHandler;
     const registration = liaHandoffIpcRegistration;
     const registeredApi = liaHandoffIpcApi;
@@ -11732,7 +11848,7 @@ const MemorySuiteStorageBridge = createMemorySuiteStorageBridge({
       await badge.setAttribute?.("aria-label", "Open LIA Persona Panel");
       await badge.setAttribute?.("title", "LIA Persona");
       await badge.setTextContent?.("L");
-      await badge.setStyleAttribute?.("position:fixed;left:58px;top:11px;right:auto;bottom:auto;z-index:880;display:flex;align-items:center;justify-content:center;width:20px;height:20px;min-width:20px;min-height:20px;margin:0;padding:0;border:1px solid rgba(255,255,255,.42);border-radius:999px;background:#dc2626;color:#ffffff;box-shadow:0 2px 8px rgba(0,0,0,.20);font:800 10px/1 system-ui,-apple-system,Segoe UI,sans-serif;text-align:center;cursor:pointer;opacity:.98;pointer-events:auto;box-sizing:border-box;overflow:hidden;");
+      await badge.setStyleAttribute?.("position:fixed;left:58px;top:11px;right:auto;bottom:auto;z-index:22;display:flex;align-items:center;justify-content:center;width:20px;height:20px;min-width:20px;min-height:20px;margin:0;padding:0;border:1px solid rgba(255,255,255,.42);border-radius:999px;background:#dc2626;color:#ffffff;box-shadow:0 2px 8px rgba(0,0,0,.20);font:800 10px/1 system-ui,-apple-system,Segoe UI,sans-serif;text-align:center;cursor:pointer;opacity:.98;pointer-events:auto;box-sizing:border-box;overflow:hidden;");
 
       personaProofMainBadgeListenerId = await badge.addEventListener?.("click", async (event) => {
         try {
@@ -15680,21 +15796,42 @@ ${revisionText}`);
     const runtime = getRuntimeApi();
     const fetchFn = runtime?.nativeFetch || runtime?.risuFetch || globalThis.fetch;
     if (typeof fetchFn !== "function") throw new Error("사용 가능한 fetch API가 없습니다.");
-    const controller = typeof AbortController !== "undefined" && !init.signal ? new AbortController() : null;
-    const timer = controller ? setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs || 30000))) : null;
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const duration = Math.max(1000, Number(timeoutMs) || 30000);
+    let timer, cancelListener, cancellationError;
+    const cancellation = new Promise((_, reject) => {
+      const cancel = (code, message) => {
+        cancellationError = Object.assign(new Error(message), { code });
+        reject(cancellationError);
+        controller?.abort(cancellationError);
+      };
+      cancelListener = () => cancel("LIA_PROVIDER_CANCELLED", "Provider request cancelled by the caller.");
+      if (init.signal?.aborted) cancelListener();
+      else {
+        init.signal?.addEventListener("abort", cancelListener, { once: true });
+        timer = setTimeout(() => cancel("LIA_PROVIDER_TIMEOUT", `Provider request timed out after ${duration}ms.`), duration);
+      }
+    });
     const startedAt = Date.now();
     const safeUrl = sanitizeLogUrl(url);
     appendDebugLog("provider", "fetch_start", { url: safeUrl, method: String(init?.method || "GET"), timeoutMs: Number(timeoutMs || 30000) });
     try {
-      const response = await fetchFn(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+      const response = await Promise.race([cancellation, Promise.resolve().then(() => {
+        if (cancellationError) throw cancellationError;
+        return fetchFn(url, { ...init, ...(controller ? { signal: controller.signal } : {}) });
+      })]);
       appendDebugLog("provider", "fetch_complete", { url: safeUrl, method: String(init?.method || "GET"), status: Number(response?.status || 0) || null, ok: response?.ok !== false, elapsedMs: Date.now() - startedAt });
       return response;
     } catch (error) {
       appendDebugLog("provider", "fetch_failed", { url: safeUrl, method: String(init?.method || "GET"), elapsedMs: Date.now() - startedAt, error: errorForLog(error) }, "error");
-      if (error?.name === "AbortError") throw new Error(`Provider request timed out after ${timeoutMs}ms.`);
+      if (cancellationError) throw cancellationError;
+      if (error?.name === "AbortError" || /signal is aborted without reason/i.test(String(error?.message || ""))) {
+        throw Object.assign(new Error("Provider request was cancelled by the host before completion."), { code: "LIA_PROVIDER_CANCELLED", cause: error });
+      }
       throw error;
     } finally {
       if (timer) clearTimeout(timer);
+      init.signal?.removeEventListener("abort", cancelListener);
     }
   }
 
@@ -16431,6 +16568,8 @@ ${revisionText}`);
   }
 
   function isTransientProviderError(error) {
+    if (error?.code === "LIA_PROVIDER_CANCELLED") return false;
+    if (error?.code === "LIA_PROVIDER_TIMEOUT") return true;
     const message = String(error?.message || error || "");
     return /(?:HTTP\s+(?:408|409|425|429|500|502|503|504)|rate.?limit|too many requests|temporar|timeout|timed out|network|fetch failed|ECONNRESET|EAI_AGAIN)/i.test(message);
   }
@@ -24390,7 +24529,7 @@ ${revisionText}`);
         .lia-header {
           position: sticky;
           top: 0;
-          z-index: 20;
+          z-index: 7;
           display: flex;
           align-items: center;
           justify-content: space-between;
@@ -24438,7 +24577,7 @@ ${revisionText}`);
         #dpg-status {
           position: sticky;
           top: 75px;
-          z-index: 19;
+          z-index: 6;
           display: flex;
           align-items: center;
           gap: 8px;
@@ -24917,12 +25056,12 @@ ${revisionText}`);
         .lia-world-summary-copy { display:grid; gap:3px; min-width:0; }
         .lia-world-summary-copy strong { color:var(--lia-text); font-size:13px; }
         .lia-world-summary-copy small { color:var(--lia-muted); font-size:10px; }
-        .lia-side-column { position:fixed !important; z-index:70; top:12px; right:12px; bottom:12px; width:min(430px, calc(100vw - 36px)); display:block !important; padding:14px; overflow:auto; border:1px solid var(--lia-line-strong); border-radius:22px; background:#f4f0f8; box-shadow:0 30px 90px rgba(0,0,0,.56); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease, opacity .2s ease; }
+        .lia-side-column { position:fixed !important; z-index:14; top:12px; right:12px; bottom:12px; width:min(430px, calc(100vw - 36px)); display:block !important; padding:14px; overflow:auto; border:1px solid var(--lia-line-strong); border-radius:22px; background:#f4f0f8; box-shadow:0 30px 90px rgba(0,0,0,.56); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease, opacity .2s ease; }
         .lia-app-layout.world-drawer-open .lia-side-column { transform:translateX(0); opacity:1; pointer-events:auto; }
         .lia-drawer-head { position:sticky; top:-14px; z-index:3; display:flex; align-items:center; justify-content:space-between; gap:12px; margin:-14px -14px 12px; padding:14px; border-bottom:1px solid var(--lia-line); background:#f4f0f8; backdrop-filter:blur(14px); }
         .lia-drawer-head > div { display:grid; gap:2px; }
         .lia-drawer-head strong { color:var(--lia-text); font-size:15px; }
-        .lia-drawer-backdrop { position:fixed; z-index:69; inset:0; display:none; background:rgba(0,0,0,.48); backdrop-filter:blur(2px); }
+        .lia-drawer-backdrop { position:fixed; z-index:13; inset:0; display:none; background:rgba(0,0,0,.48); backdrop-filter:blur(2px); }
         .lia-app-layout.world-drawer-open .lia-drawer-backdrop { display:block; }
         .lia-mode-stage { width:min(980px,100%); margin:0 auto; padding:14px 0 2px; }
         .lia-mode-head { margin-bottom:8px; }
@@ -25042,9 +25181,9 @@ ${revisionText}`);
           .lia-sidebar .dpg-tab-button { justify-content:center; padding:0; }
           .lia-sidebar-collapse { display:none; }
           #dpg-persona-panel-toggle { display:inline-flex; }
-          .lia-persona-panel { position:fixed; z-index:76; top:12px; right:12px; bottom:12px; width:min(340px,calc(100vw - 36px)); height:auto; min-height:0; border:1px solid var(--lia-line-strong); border-radius:20px; background:#f4f0f8; box-shadow:0 28px 90px rgba(0,0,0,.58); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease,opacity .2s ease; }
+          .lia-persona-panel { position:fixed; z-index:16; top:12px; right:12px; bottom:12px; width:min(340px,calc(100vw - 36px)); height:auto; min-height:0; border:1px solid var(--lia-line-strong); border-radius:20px; background:#f4f0f8; box-shadow:0 28px 90px rgba(0,0,0,.58); transform:translateX(calc(100% + 28px)); opacity:0; pointer-events:none; transition:transform .2s ease,opacity .2s ease; }
           .lia-app-layout.persona-panel-open .lia-persona-panel { transform:translateX(0); opacity:1; pointer-events:auto; }
-          .lia-persona-panel-backdrop { position:fixed; z-index:75; inset:0; background:rgba(0,0,0,.48); backdrop-filter:blur(2px); }
+          .lia-persona-panel-backdrop { position:fixed; z-index:15; inset:0; background:rgba(0,0,0,.48); backdrop-filter:blur(2px); }
           .lia-app-layout.persona-panel-open .lia-persona-panel-backdrop { display:block; }
           #dpg-persona-panel-close { display:inline-flex; }
         }
@@ -25110,7 +25249,7 @@ ${revisionText}`);
           }
           .lia-workspace { width:100%; padding:12px 10px 20px; }
           .lia-sidebar {
-            position:fixed; z-index:60; inset:auto 0 0 0; width:100%;
+            position:fixed; z-index:12; inset:auto 0 0 0; width:100%;
             height:calc(60px + env(safe-area-inset-bottom, 0px)); min-height:0;
             display:block; padding:6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
             overflow:hidden; border:0; border-top:1px solid var(--lia-line-strong);
@@ -25236,7 +25375,7 @@ ${revisionText}`);
         body{padding:12px;background:#eeedf2;font-size:14px;line-height:1.6;color:var(--lia-text)}
         .lia-shell{container-type:inline-size;container-name:pocket;width:min(414px,100%);height:min(900px,calc(100dvh - 24px));min-height:0;max-height:none;display:flex;flex-direction:column;overflow:hidden;border:8px solid white;border-radius:38px;background:var(--lia-bg);box-shadow:0 20px 70px #49376015}
         .lia-shell.pocket-wide{width:min(960px,100%)}
-        .lia-header{flex-shrink:0;position:relative;z-index:60;display:flex;justify-content:space-between;align-items:center;background:var(--lia-bg);padding:20px 24px 14px;border:0;gap:8px}
+        .lia-header{flex-shrink:0;position:relative;z-index:12;display:flex;justify-content:space-between;align-items:center;background:var(--lia-bg);padding:20px 24px 14px;border:0;gap:8px}
         .lia-brand-title{font-size:23px;font-weight:750;letter-spacing:2px;margin:0;color:var(--lia-text)}.lia-brand-title span{font-size:10px;font-weight:400;letter-spacing:0;color:var(--lia-muted);margin-left:4px}
         .lia-pocket-icon{width:21px;height:21px;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;fill:none;flex-shrink:0}
         .lia-pocket-menu>summary{display:grid;place-items:center;width:44px;height:44px;background:white;border-radius:50%;color:#927da8;cursor:pointer;list-style:none}.lia-pocket-menu summary::-webkit-details-marker{display:none}
@@ -25273,8 +25412,15 @@ ${revisionText}`);
         .lia-shell .lia-editor-tabs{background:transparent;border:0;padding:0;gap:5px}.lia-shell .lia-editor-tab{min-height:40px;background:white;border:0;border-radius:11px;color:var(--lia-muted);font-size:11px;padding:8px 12px}.lia-shell .lia-editor-tab.active{background:#eee5f6;color:#775691}.lia-shell .lia-spec-grid{grid-template-columns:1fr}.lia-shell .lia-spec-field-card{border:0;background:#f7f3fa;border-radius:15px}.lia-shell .lia-edit-save-panel{background:#f4eef9;border:0;border-radius:16px}.lia-shell .lia-edit-save-copy small{font-size:10px;line-height:1.6}.lia-shell .lia-edit-save-actions{grid-template-columns:1fr}.lia-shell .lia-edit-save-actions small{font-size:10px}
         .lia-shell .lia-vault-page{background:none;padding:0}.lia-shell .lia-vault-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.lia-shell .lia-vault-card{display:block;min-width:0;padding:18px 15px;background:white;border:1px solid transparent;border-radius:20px;text-align:left}.lia-shell .lia-vault-card.active{border-color:#cbb7dc;background:#fcfaff}.lia-vault-avatar{display:grid;place-items:center;width:62px;height:62px;border-radius:22px;background:#ece3f4;color:#b49bc8;margin-bottom:14px}.lia-vault-avatar .lia-pocket-icon{width:34px;height:34px}.lia-shell .lia-vault-card header{display:block}.lia-shell .lia-vault-card header strong{font-size:14px;font-weight:600}.lia-shell .lia-vault-card header span{display:none}.lia-shell .lia-vault-card p{font-size:10px;color:var(--lia-muted);line-height:1.6;max-height:3.2em;overflow:hidden}.lia-shell .lia-vault-card-meta{display:none}.lia-shell .lia-vault-page-toolbar{display:grid;gap:12px}.lia-shell .lia-vault-actions{display:grid;grid-template-columns:1fr 1fr}.lia-pocket-new{width:100%;margin:12px 0}.lia-shell .lia-vault-empty,.lia-shell .lia-empty-result{background:white;border:0;border-radius:22px;padding:32px 20px}.lia-shell .lia-vault-empty strong,.lia-shell .lia-empty-result strong{font-size:15px}.lia-shell .lia-vault-empty span,.lia-shell .lia-empty-result p{font-size:12px}
         .lia-shell .lia-asset-config-panel{padding:0}.lia-shell .lia-asset-config-panel>summary{padding:18px}.lia-shell .lia-asset-config-panel[open]{padding:0 16px 16px}.lia-shell .lia-asset-config-panel[open]>summary{margin:0 -16px 16px}.lia-shell .lia-asset-gallery-grid{grid-template-columns:1fr 1fr}.lia-shell .lia-asset-step{font-size:10px}.lia-shell .lia-asset-step.active{color:#77588f}.lia-shell .lia-asset-step.done{color:#427461}.lia-shell .lia-asset-badge{color:#77588f;background:#f1e9f8}.lia-shell .lia-asset-thumb{background:#f1ebf7}.lia-shell .lia-context-strip{font-size:10px;overflow-wrap:anywhere}
-        .lia-shell .lia-side-column{background:#fcfaff;border:0;box-shadow:0 20px 70px #49376025;visibility:hidden}.lia-shell .world-drawer-open .lia-side-column{visibility:visible}.lia-shell .lia-drawer-head{background:#fcfaff}.lia-shell .lia-persona-panel{position:absolute;inset:auto 0 0 auto;width:min(390px,100%);height:auto;min-height:0;max-height:96%;border:0;border-radius:24px 24px 0 0;background:#fcfaff;box-shadow:0 -10px 50px #49376020;z-index:55;display:none;transform:none;opacity:1;pointer-events:auto;overflow:auto;padding:18px}.lia-shell .persona-panel-open .lia-persona-panel{display:flex}.lia-shell .lia-persona-panel-backdrop{display:none;position:absolute;inset:0;z-index:54;background:#30213938;backdrop-filter:blur(2px)}.lia-shell .persona-panel-open .lia-persona-panel-backdrop{display:block}.lia-shell .lia-persona-card-list{overflow:visible;flex:none}.lia-shell .lia-persona-card{background:white;border-radius:18px}.lia-shell .lia-persona-card-copy strong{font-size:13px}.lia-shell .lia-persona-card-copy small,.lia-shell .lia-persona-panel small{font-size:10px}.lia-shell .lia-persona-pin{min-width:40px}.lia-shell .lia-persona-avatar{background:#eee5f6;color:#a58abb}.lia-shell .lia-persona-panel button{min-height:40px}.lia-shell .lia-persona-proof{background:#f4eef9;border:0}.lia-shell .lia-persona-proof-title{font-size:12px}
+        .lia-shell .lia-side-column{background:#fcfaff;border:0;box-shadow:0 20px 70px #49376025;visibility:hidden}.lia-shell .world-drawer-open .lia-side-column{visibility:visible}.lia-shell .lia-drawer-head{background:#fcfaff}.lia-shell .lia-persona-panel{position:absolute;inset:auto 0 0 auto;width:min(390px,100%);height:auto;min-height:0;max-height:96%;border:0;border-radius:24px 24px 0 0;background:#fcfaff;box-shadow:0 -10px 50px #49376020;z-index:11;display:none;transform:none;opacity:1;pointer-events:auto;overflow:auto;padding:18px}.lia-shell .persona-panel-open .lia-persona-panel{display:flex}.lia-shell .lia-persona-panel-backdrop{display:none;position:absolute;inset:0;z-index:10;background:#30213938;backdrop-filter:blur(2px)}.lia-shell .persona-panel-open .lia-persona-panel-backdrop{display:block}.lia-shell .lia-persona-card-list{overflow:visible;flex:none}.lia-shell .lia-persona-card{background:white;border-radius:18px}.lia-shell .lia-persona-card-copy strong{font-size:13px}.lia-shell .lia-persona-card-copy small,.lia-shell .lia-persona-panel small{font-size:10px}.lia-shell .lia-persona-pin{min-width:40px}.lia-shell .lia-persona-avatar{background:#eee5f6;color:#a58abb}.lia-shell .lia-persona-panel button{min-height:40px}.lia-shell .lia-persona-proof{background:#f4eef9;border:0}.lia-shell .lia-persona-proof-title{font-size:12px}
         @container pocket (min-width:700px){.lia-pocket-columns{display:grid;grid-template-columns:1fr 1fr;gap:28px}.lia-pocket-columns>div:nth-child(2)>.lia-pocket-heading-row:first-child .lia-pocket-heading{margin-top:0}.lia-pocket-columns>div:nth-child(2)>.lia-pocket-heading-row:first-child button{margin-top:-5px}.lia-workspace{padding:8px 30px 30px}.lia-shell .lia-provider-grid,.lia-shell .lia-spec-grid{grid-template-columns:1fr 1fr}.lia-shell .lia-vault-card-grid{grid-template-columns:repeat(4,1fr)}.lia-shell .lia-mode-grid-four{grid-template-columns:repeat(4,1fr)}.lia-pocket-nav{padding-left:20%;padding-right:20%}.lia-shell .lia-asset-page-grid{grid-template-columns:1fr 1.3fr}}
+        .lia-shell #dpg-persona-panel-close{display:inline-flex}
+        .lia-shell .lia-persona-panel-head{position:sticky;top:0;z-index:2;background:#fcfaff;flex-shrink:0}
+        .lia-shell .lia-vault-page-toolbar{grid-template-columns:minmax(0,1fr);min-width:0}
+        .lia-shell .lia-vault-page-toolbar>*{min-width:0;max-width:100%}
+        .lia-shell .lia-vault-page-toolbar select{width:100%;min-width:0;max-width:100%}
+        .lia-shell .lia-vault-page-toolbar .lia-vault-actions{grid-template-columns:repeat(2,minmax(0,1fr));min-width:0}
+        .lia-shell .lia-vault-page-toolbar button{min-width:0;white-space:normal;overflow-wrap:anywhere}
         @media(max-width:460px){body{padding:0}.lia-shell,.lia-shell.pocket-wide{width:100%;height:100dvh;border:0;border-radius:0}.lia-header{padding:20px 23px 14px}.lia-brand-title span{display:inline}.lia-workspace{padding:4px 23px 24px}.lia-shell .lia-world-summary{flex-direction:row}.lia-shell .lia-world-summary-copy{flex:1;min-width:0}.lia-shell .lia-world-summary-copy small{display:none}}
         button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #b29ad6;outline-offset:3px}button:disabled{opacity:.45;cursor:not-allowed}
         @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -25606,6 +25752,7 @@ ${revisionText}`);
     };
   } catch (_) {}
 
+  void ensureLiaHandoffIpc();
   try { await readLogStore(); } catch (_) {}
   try { preservedVisualAssetPresetStore = await readVisualAssetPresetStore(); } catch (_) { preservedVisualAssetPresetStore = normalizeVisualAssetPresetStore(); }
   appendOperationLog("plugin_start", `${PLUGIN_DISPLAY_NAME} v${PLUGIN_VERSION} 시작`, {}, "info");
@@ -25628,7 +25775,7 @@ ${revisionText}`);
     const startupBinding = await readLivePersonaBindingByScopeKey(livePersonaScopeKey(startupCtx));
     if (startupBinding?.pendingBindingChange) await resumeLivePersonaBindingChange(startupCtx, startupBinding);
   } catch (_) {}
-  try { await registerLiaHandoffIpc(); } catch (_) {}
+  void ensureLiaHandoffIpc();
   try {
     const inherited = await ensureInheritedLivePersonaForCurrentChat(startupCtx);
     if (inherited?.adopted) startupCtx = await getLiveRuntimeContext();
