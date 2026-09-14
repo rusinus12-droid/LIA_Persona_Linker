@@ -1,7 +1,7 @@
 //@name lia_persona_linker
 //@display-name LIA: Persona Linker
 //@api 3.0
-//@version 0.26.75
+//@version 0.26.77
 /* Target-only handoff storage preparation v1. Authenticated owner handlers only. */
 async function prepareMemorySuiteHandoffTargetStorage(api, storage, owner, payload) {
   const readTarget = async () => {
@@ -148,7 +148,7 @@ async function prepareMemorySuiteHandoffTargetStorage(api, storage, owner, paylo
   const OPERATION_LOG_MAX = 300;
   const DEBUG_LOG_MAX = 600;
   const LOG_PERSIST_DEBOUNCE_MS = 1500;
-const PLUGIN_VERSION = "0.26.75";
+const PLUGIN_VERSION = "0.26.77";
   const LIA_SETTING_UI_ID = "lia-persona-linker-setting";
   const LIA_BUTTON_UI_ID = "lia-persona-linker-button";
   const PERSONA_PROOF_VERSION = 1;
@@ -1337,7 +1337,7 @@ function createMemorySuiteHostLineage() {
 /* END LIBRARIAN HOST LINEAGE SDK */
 const MemorySuiteHostLineage = createMemorySuiteHostLineage();
 
-/* LIBRARIAN SYSTEM STORAGE SDK v1.8.19
+/* LIBRARIAN SYSTEM STORAGE SDK v1.8.21
  * Scope-routed durable storage client shared by Flashback, HAYAKU, LIBRA, LIA and RE:TRACE.
  * The server stores opaque values. Each plugin keeps ownership of its own data schema.
  */
@@ -1498,6 +1498,60 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     try { if (typeof TextEncoder === 'function') return new TextEncoder().encode(String(serialized)).byteLength; } catch (_) {}
     return String(serialized).length * 2;
   };
+
+
+  const createScopedSyncMetrics = () => ({
+    localReadCount: 0, localReadBytes: 0, localWriteCount: 0, localWriteBytes: 0,
+    localRemoveCount: 0, remoteReadCount: 0, remoteReadBytes: 0,
+    remoteListCount: 0, remoteListBytes: 0, remoteWriteCount: 0, remoteWriteBytes: 0,
+    byOperation: {}
+  });
+  const cloneScopedSyncMetrics = metrics => {
+    const value = metrics && typeof metrics === 'object' ? metrics : createScopedSyncMetrics();
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return createScopedSyncMetrics(); }
+  };
+  const recordScopedSyncMetric = (metrics, operation, values = {}) => {
+    if (!metrics || typeof metrics !== 'object') return;
+    const op = String(operation || 'unknown');
+    const row = metrics.byOperation[op] || { count: 0, localBytes: 0, remoteBytes: 0 };
+    row.count += Math.max(1, Number(values.count || 1) || 1);
+    row.localBytes += Math.max(0, Number(values.localBytes || 0) || 0);
+    row.remoteBytes += Math.max(0, Number(values.remoteBytes || 0) || 0);
+    metrics.byOperation[op] = row;
+    for (const field of ['localReadCount','localReadBytes','localWriteCount','localWriteBytes','localRemoveCount','remoteReadCount','remoteReadBytes','remoteListCount','remoteListBytes','remoteWriteCount','remoteWriteBytes']) {
+      if (Object.prototype.hasOwnProperty.call(values, field)) metrics[field] += Math.max(0, Number(values[field] || 0) || 0);
+    }
+  };
+  const mergeScopedSyncMetrics = (target, source) => {
+    if (!target || !source || typeof source !== 'object') return target;
+    for (const field of ['localReadCount','localReadBytes','localWriteCount','localWriteBytes','localRemoveCount','remoteReadCount','remoteReadBytes','remoteListCount','remoteListBytes','remoteWriteCount','remoteWriteBytes']) {
+      target[field] = Math.max(0, Number(target[field] || 0) || 0) + Math.max(0, Number(source[field] || 0) || 0);
+    }
+    for (const [operation, row] of Object.entries(source.byOperation || {})) {
+      const current = target.byOperation[operation] || { count: 0, localBytes: 0, remoteBytes: 0 };
+      current.count += Math.max(0, Number(row?.count || 0) || 0);
+      current.localBytes += Math.max(0, Number(row?.localBytes || 0) || 0);
+      current.remoteBytes += Math.max(0, Number(row?.remoteBytes || 0) || 0);
+      target.byOperation[operation] = current;
+    }
+    return target;
+  };
+  const scopedSyncRemoteValueBytes = remote => remote?.exists === true
+    ? Math.max(0, Number(remote?.valueBytes || 0) || storageValueBytes(remote?.value)) : 0;
+  const scopedSyncFailure = ({ key = '', stage = 'unknown', operation = 'unknown', error, localBytes = 0, remoteBytes = 0 } = {}) => {
+    const message = compact(error?.message || error || 'memory_suite_scope_sync_failed', 700);
+    const errorCode = String(error?.code || 'MEMORY_SUITE_SCOPE_SYNC_FAILED');
+    const retryable = typeof error?.retryable === 'boolean' ? error.retryable : retryableSyncError(error);
+    return {
+      key: String(key || ''), stage: String(stage || 'unknown'), errorCode, message,
+      operation: String(operation || 'unknown'),
+      localBytes: Math.max(0, Number(localBytes || 0) || 0),
+      remoteBytes: Math.max(0, Number(remoteBytes || 0) || 0), retryable,
+      error: message
+    };
+  };
+
+  // MEMORY_SUITE_SCOPE_SYNC_DIAGNOSTICS_V1
 
   // Batch-read values may legally use keys such as "__proto__".  Assigning
   // those keys with Object.assign or bracket notation can invoke inherited
@@ -3050,6 +3104,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const createBackgroundJob = async (kind, target = {}) => {
     const currentConfig = await readConfig(true);
+    const requestedMode = target.requestedMode ? normalizeMode(target.requestedMode) : (target.mode ? normalizeMode(target.mode) : currentConfig.mode);
     const existing = state.syncJob.current;
     if (existing && !syncJobTerminal(existing.status)) {
       const sameTarget = existing.kind === kind
@@ -3075,7 +3130,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       phase: 'queued',
       sourceMode: currentConfig.mode,
       sourceUrl: currentConfig.url,
-      targetMode: target.mode ? normalizeMode(target.mode) : currentConfig.mode,
+      requestedMode, effectiveMode: currentConfig.mode,
+      targetMode: requestedMode,
       targetUrl: target.url ? normalizeServerUrl(target.url) : currentConfig.url,
       totalItems: 0,
       processedItems: 0,
@@ -3110,6 +3166,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const completeBackgroundJob = async (result = null) => {
     updateSyncJob({
+      requestedMode: result?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+      effectiveMode: result?.effectiveMode || state.syncJob.current?.sourceMode || '',
       status: 'completed', phase: 'completed', currentAction: '완료', currentKey: '',
       message: '작업이 안전하게 완료되었습니다.', result: result ? cloneSyncJob(result) : null,
       error: '', nextRetryAt: 0, finishedAt: Date.now()
@@ -3119,6 +3177,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
   const failBackgroundJob = async error => {
     updateSyncJob({
+      requestedMode: error?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+      effectiveMode: error?.effectiveMode || state.syncJob.current?.sourceMode || '',
       status: 'failed', phase: 'failed', currentAction: '작업 중단', currentKey: '',
       message: '작업을 완료하지 못했습니다.', error: compact(error?.message || error, 700),
       nextRetryAt: 0, finishedAt: Date.now()
@@ -3136,7 +3196,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       try {
         let result;
         if (job.kind === 'connection_config') {
-          result = await configureConnection({ mode: job.targetMode, url: job.targetUrl }, { onProgress: applySyncProgressToJob });
+          result = await configureConnection({ mode: job.requestedMode || job.targetMode, url: job.targetUrl }, { onProgress: applySyncProgressToJob });
         } else if (job.kind === 'manual_sync') {
           result = await synchronizeAllLegacy({ allowOverwrite: true, restoreMissingLocal: true, onProgress: applySyncProgressToJob });
           if (!result.ok) throw new Error(`sync_failures:${result.failures.length}`);
@@ -4749,10 +4809,40 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       Object.assign(progress, patch || {}, { phase: String(phase || progress.phase), lastActivityAt: Date.now() });
       try { onProgress?.({ ...progress }); } catch (_) {}
     };
+    const metrics = createScopedSyncMetrics();
+    const readLocal = async (key, operation = 'local_read') => {
+      const value = await legacyRead(legacy, key);
+      const bytes = isNullishStorageValue(value) ? 0 : storageValueBytes(value);
+      recordScopedSyncMetric(metrics, operation, { localReadCount: 1, localReadBytes: bytes, localBytes: bytes });
+      return value;
+    };
+    const writeLocal = async (key, value, operation = 'local_write') => {
+      const bytes = isNullishStorageValue(value) ? 0 : storageValueBytes(value);
+      recordScopedSyncMetric(metrics, operation, { localWriteCount: 1, localWriteBytes: bytes, localBytes: bytes });
+      return await legacyWriteVerified(legacy, key, value);
+    };
+    const removeLocal = async (key, operation = 'local_remove') => {
+      recordScopedSyncMetric(metrics, operation, { localRemoveCount: 1 });
+      return await legacyRemoveVerified(legacy, key);
+    };
+    const readRemote = async (remoteKey, operation = 'remote_read') => {
+      const remote = await remoteGet(space, remoteKey, { allowPluginOnly: true });
+      const bytes = scopedSyncRemoteValueBytes(remote);
+      recordScopedSyncMetric(metrics, operation, { remoteReadCount: 1, remoteReadBytes: bytes, remoteBytes: bytes });
+      return remote;
+    };
+    const writeRemote = async (...args) => {
+      const value = args[3];
+      const bytes = args[0] === 'set' ? storageValueBytes(value) : 0;
+      recordScopedSyncMetric(metrics, 'remote_write', { remoteWriteCount: 1, remoteWriteBytes: bytes, remoteBytes: bytes });
+      return await remoteMutate(...args);
+    };
     const integrityBefore = await remoteIntegrity({ allowPluginOnly: true });
+    recordScopedSyncMetric(metrics, 'integrity_before', { remoteReadCount: 1, remoteReadBytes: storageValueBytes(integrityBefore), remoteBytes: storageValueBytes(integrityBefore) });
     report('inventory', { message: `${scope.label || scope.scopeId} 데이터 목록을 조사하고 있습니다.` });
     const localRows = await collectScopedLegacyRows(legacy, space, scope);
     const listing = await remoteKeys(space, '', { allowPluginOnly: true });
+    recordScopedSyncMetric(metrics, 'remote_keys', { remoteReadCount: 1, remoteReadBytes: storageValueBytes(listing), remoteListCount: 1, remoteListBytes: storageValueBytes(listing), remoteBytes: storageValueBytes(listing) });
     const remoteRecords = new Map((Array.isArray(listing.records) ? listing.records : []).map(row => [String(row?.key || ''), row]));
     const remoteKeysForScope = new Set();
     for (const remoteKey of Array.isArray(listing.keys) ? listing.keys : []) {
@@ -4773,19 +4863,25 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       schema: 'memory-suite.scope-sync.v1', namespace, space, scope, startedAt: progress.startedAt,
       totalItems: progress.totalItems, processedItems: 0, processedBytes: 0, transferredBytes: 0,
       uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
-      plannedUploaded: 0, plannedRestored: 0, dryRun, conflicts: [], failures: [],
+      plannedUploaded: 0, plannedRestored: 0, dryRun, conflicts: [], failures: [], failureDetails: [],
+      metrics, requestedMode: syncOptions.requestedMode || '', effectiveMode: syncOptions.effectiveMode || '',
       integrityBefore, integrityAfter: null
     };
     for (const row of localRows) {
-      let bytes = 0, action = '비교';
+      let bytes = 0, localBytes = 0, remoteBytes = 0, stage = 'local_read', operation = 'local_compare', action = '비교';
       try {
         report('sync_local', { currentKey: row.key, currentAction: 'pluginStorage → 서버 비교' });
-        const local = await legacyRead(legacy, row.key);
+        stage = 'local_read'; operation = 'local_compare';
+        const local = await readLocal(row.key, operation);
+        localBytes = isNullishStorageValue(local) ? 0 : storageValueBytes(local);
         const projected = isNullishStorageValue(local) ? null : await routeProjectValue(row.route, local);
         bytes = isNullishStorageValue(projected) ? 0 : storageValueBytes(projected);
+        localBytes = bytes;
         if (isNullishStorageValue(projected)) action = '빈 값 건너뜀';
         else {
-          const remote = await remoteGet(space, row.route.remoteKey, { allowPluginOnly: true });
+          stage = 'remote_read'; operation = 'remote_compare';
+          const remote = await readRemote(row.route.remoteKey, operation);
+          remoteBytes = scopedSyncRemoteValueBytes(remote);
           if (remote.exists === true && jsonComparable(remote.value) === jsonComparable(projected)) { result.matched += 1; action = '일치 확인'; }
           else if (flashbackWriterAlias(row.route.remoteKey) && remote.exists === true) {
             result.conflicts.push({ key:row.key, remoteKey:row.route.remoteKey, reason:'flashback_server_canonical_mismatch', localPreserved:true, serverPreserved:true });
@@ -4795,9 +4891,9 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
             if (!dryRun && syncOptions.allowOverwrite !== false && syncOptions.restoreMissingLocal === true) {
               const removed = await routeRemoveLocal(
                 row.route,
-                async()=>legacyRead(legacy,row.key),
-                async next=>legacyWriteVerified(legacy,row.key,next),
-                async()=>legacyRemoveVerified(legacy,row.key)
+                async()=>readLocal(row.key,'tombstone_local_read'),
+                async next=>writeLocal(row.key,next,'tombstone_local_write'),
+                async()=>removeLocal(row.key,'tombstone_local_remove')
               );
               if (!removed) throw new Error('pluginstorage_tombstone_apply_failed');
               result.removedByTombstone += 1;
@@ -4814,43 +4910,53 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
             result.plannedUploaded += 1;
             action = remote.exists === true ? '서버 덮어쓰기 예정' : '서버 업로드 예정';
           } else {
-            await remoteMutate('set', space, row.route.remoteKey, projected, { allowPluginOnly: true,
+            stage = 'remote_write'; operation = 'remote_write';
+            await writeRemote('set', space, row.route.remoteKey, projected, { allowPluginOnly: true,
               ...(flashbackWriterAlias(row.route.remoteKey) ? { expectedRevision:remote.revision || 0 } : {}) });
             result.uploaded += 1; result.transferredBytes += bytes; action = '서버 저장·검증 완료';
           }
         }
-      } catch (error) { result.failures.push({ key: row.key, error: compact(error?.message || error, 240) }); action = '실패'; }
+      } catch (error) { const detail = scopedSyncFailure({ key: row.key, stage, operation, error, localBytes, remoteBytes }); result.failures.push(detail); result.failureDetails.push(detail); action = '실패'; }
       finally {
         result.processedItems += 1; result.processedBytes += bytes;
-        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length, metrics: cloneScopedSyncMetrics(metrics) });
         report('sync_local', { currentKey: row.key, currentAction: action });
       }
     }
     for (const remoteKey of missingRemoteRows) {
-      let bytes = Math.max(0, Number(remoteRecords.get(remoteKey)?.valueBytes || 0) || 0), action = '서버 → pluginStorage 복구';
+      let bytes = Math.max(0, Number(remoteRecords.get(remoteKey)?.valueBytes || 0) || 0), localBytes = 0, remoteBytes = bytes, stage = 'remote_read', operation = 'restore_remote_read', action = '서버 → pluginStorage 복구';
       try {
         const decoded = scopedRemoteKeyInfo(remoteKey);
         const route = await resolveScopedRoute(space, decoded.logicalKey, { scope, noCache: true });
-        const remote = await remoteGet(space, remoteKey, { allowPluginOnly: true });
+        stage = 'remote_read'; operation = 'restore_remote_read';
+        const remote = await readRemote(remoteKey, operation);
+        remoteBytes = scopedSyncRemoteValueBytes(remote) || bytes;
         if (remote.exists === true) {
-          const current = await legacyRead(legacy, decoded.logicalKey);
+          stage = 'local_read'; operation = 'restore_local_read';
+          const current = await readLocal(decoded.logicalKey, operation);
+          localBytes = isNullishStorageValue(current) ? 0 : storageValueBytes(current);
           const merged = await routeMergeValue(route, remote.value, current);
           if (dryRun) {
             result.plannedRestored += 1; action = '복구 가능 확인';
           } else {
-            if (!await legacyWriteVerified(legacy, decoded.logicalKey, merged)) throw new Error('pluginstorage_restore_failed');
+            stage = 'local_write'; operation = 'restore_local_write';
+            if (!await writeLocal(decoded.logicalKey, merged, operation)) throw new Error('pluginstorage_restore_failed');
             result.restored += 1; result.transferredBytes += bytes; action = '복구·readback 완료';
           }
         }
-      } catch (error) { result.failures.push({ key: remoteKey, error: compact(error?.message || error, 240) }); action = '복구 실패'; }
+      } catch (error) { const detail = scopedSyncFailure({ key: remoteKey, stage, operation, error, localBytes, remoteBytes }); result.failures.push(detail); result.failureDetails.push(detail); action = '복구 실패'; }
       finally {
         result.processedItems += 1; result.processedBytes += bytes;
-        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length });
+        Object.assign(progress, { processedItems: result.processedItems, processedBytes: result.processedBytes, transferredBytes: result.transferredBytes, uploaded: result.uploaded, restored: result.restored, matched: result.matched, removedByTombstone: result.removedByTombstone, failureCount: result.failures.length, conflictCount: result.conflicts.length, metrics: cloneScopedSyncMetrics(metrics) });
         report('sync_remote', { currentKey: remoteKey, currentAction: action });
       }
     }
     report('integrity_after', { currentKey: '', currentAction: dryRun ? '사전검사 완료' : '최종 무결성 확인', message: dryRun ? '쓰기 없는 모드 전환 사전검사를 완료했습니다.' : '현재 스코프 동기화 후 서버 DATA 무결성을 확인하고 있습니다.' });
     result.integrityAfter = dryRun ? integrityBefore : await remoteIntegrity({ allowPluginOnly: true });
+    if (!dryRun) recordScopedSyncMetric(metrics, 'integrity_after', { remoteReadCount: 1, remoteReadBytes: storageValueBytes(result.integrityAfter), remoteBytes: storageValueBytes(result.integrityAfter) });
+    result.metrics = cloneScopedSyncMetrics(metrics);
+    result.failureDetails = result.failures.slice();
+    result.diagnostics = { schema: 'memory-suite.scope-sync-diagnostics.v1', metrics: result.metrics, failures: result.failureDetails.slice() };
     result.ok = result.failures.length === 0 && result.conflicts.length === 0;
     report(result.ok ? 'scope_complete' : 'scope_incomplete', { currentKey: '', currentAction: result.ok ? '스코프 동기화 완료' : '확인 필요', message: result.ok ? `${scope.label || scope.scopeId} 동기화를 완료했습니다.` : `실패 ${result.failures.length} · 충돌 ${result.conflicts.length}` });
     if (!result.ok) {
@@ -4863,17 +4969,51 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
   const scopedSynchronizeAll = async (syncOptions = {}) => {
     const scope = normalizeScopeDescriptor(syncOptions.scope || await resolveCurrentScope(true));
     if (syncOptions.allowRecoveryRequired !== true) await assertRecoveryActionAllowed(scope, 'synchronize');
-    const result = { schema: 'memory-suite.scope-sync-all.v1', namespace, scope, plugin: null, local: null, uploaded: 0, restored: 0, matched: 0, removedByTombstone:0, plannedUploaded:0, plannedRestored:0, failures: [], totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0 };
+    const modeState = await readScopeMode(scope, true);
+    const requestedMode = normalizeMode(syncOptions.requestedMode || syncOptions.mode || modeState.mode);
+    const result = {
+      schema: 'memory-suite.scope-sync-all.v1', namespace, scope, plugin: null, local: null,
+      requestedMode, effectiveMode: modeState.mode,
+      uploaded: 0, restored: 0, matched: 0, removedByTombstone: 0,
+      plannedUploaded: 0, plannedRestored: 0, failures: [], failureDetails: [], conflicts: [],
+      totalItems: 0, processedItems: 0, processedBytes: 0, transferredBytes: 0,
+      metrics: createScopedSyncMetrics()
+    };
     const forward = progress => { try { syncOptions.onProgress?.(progress); } catch (_) {} };
-    if (state.legacy.plugin) {
-      result.plugin = await scopedSynchronizeSpace(state.legacy.plugin, 'plugin', { ...syncOptions, scope, onProgress: forward });
-      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.plugin?.[field] || 0);
+    const addPart = (space, part) => {
+      result[space] = part;
+      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(part?.[field] || 0);
+      mergeScopedSyncMetrics(result.metrics, part?.metrics);
+      for (const failure of Array.isArray(part?.failures) ? part.failures : []) {
+        const detail = { ...failure, space: String(space) };
+        result.failures.push(detail); result.failureDetails.push(detail);
+      }
+      for (const conflict of Array.isArray(part?.conflicts) ? part.conflicts : []) result.conflicts.push({ ...conflict, space: String(space) });
+    };
+    const runPart = async (legacy, space) => {
+      if (!legacy || (space === 'local' && typeof legacy.keys !== 'function')) return;
+      try {
+        const part = await scopedSynchronizeSpace(legacy, space, { ...syncOptions, scope, requestedMode, effectiveMode: modeState.mode, onProgress: forward });
+        addPart(space, part);
+      } catch (error) {
+        const part = error?.result && typeof error.result === 'object' ? error.result : null;
+        if (part) addPart(space, part);
+        else {
+          const detail = scopedSyncFailure({ key: '', stage: 'scope', operation: space + '_scope_sync', error });
+          result.failures.push({ ...detail, space }); result.failureDetails.push({ ...detail, space });
+        }
+      }
+    };
+    await runPart(state.legacy.plugin, 'plugin');
+    await runPart(state.legacy.local, 'local');
+    result.metrics = cloneScopedSyncMetrics(result.metrics);
+    result.diagnostics = { schema: 'memory-suite.scope-sync-diagnostics.v1', metrics: result.metrics, failures: result.failureDetails.slice(), conflicts: result.conflicts.slice() };
+    result.ok = result.failures.length === 0 && result.conflicts.length === 0;
+    if (!result.ok) {
+      const error = new Error('memory_suite_scope_sync_incomplete:' + scope.scopeId + ':failures=' + result.failures.length + ',conflicts=' + result.conflicts.length);
+      error.code = 'MEMORY_SUITE_SCOPE_SYNC_INCOMPLETE'; error.result = result;
+      throw error;
     }
-    if (state.legacy.local && typeof state.legacy.local?.keys === 'function') {
-      result.local = await scopedSynchronizeSpace(state.legacy.local, 'local', { ...syncOptions, scope, onProgress: forward });
-      for (const field of ['uploaded','restored','matched','removedByTombstone','plannedUploaded','plannedRestored','totalItems','processedItems','processedBytes','transferredBytes']) result[field] += Number(result.local?.[field] || 0);
-    }
-    result.ok = true;
     return result;
   };
 
@@ -5279,28 +5419,30 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     const recoveryLock = await recoveryLockForScope(scope);
     if (recoveryLock && target !== MODE_SERVER_ONLY) throw recoveryRequiredError(scope, recoveryLock, `set_mode_${target}`);
     const current = await readScopeMode(scope, true);
-    if (target === current.mode) return { changed:false, from:current.mode, to:target, scope, modeLabel:modeLabel(target) };
+    if (target === current.mode) return { changed:false, requestedMode:target, effectiveMode:current.mode, from:current.mode, to:target, scope, modeLabel:modeLabel(target) };
     if (!state.legacy.plugin) throw new Error('memory_suite_pluginstorage_unavailable');
     const onProgress = typeof operationOptions.onProgress === 'function' ? operationOptions.onProgress : null;
     try {
       if (current.mode === MODE_PLUGIN_ONLY && target !== MODE_PLUGIN_ONLY) {
         // Discover every deterministic conflict before the first server or local write.
         // This prevents a late key conflict from leaving an earlier key partially seeded.
-        const preflight = await scopedSynchronizeAll({ scope, dryRun:true, allowOverwrite:false, restoreMissingLocal:false, onProgress });
-        const seeded = await scopedSynchronizeAll({ scope, allowOverwrite:false, restoreMissingLocal:false, onProgress });
+        const preflight = await scopedSynchronizeAll({ scope, requestedMode:target, effectiveMode:current.mode, dryRun:true, allowOverwrite:false, restoreMissingLocal:false, onProgress });
+        const seeded = await scopedSynchronizeAll({ scope, requestedMode:target, effectiveMode:current.mode, allowOverwrite:false, restoreMissingLocal:false, onProgress });
         const settled = seeded;
         if (!preflight.ok || !seeded.ok || !settled.ok) throw new Error('memory_suite_scope_mode_seed_failed');
         await remoteIntegrity({ allowPluginOnly:true });
       } else if (current.mode === MODE_MIRROR && target === MODE_SERVER_ONLY) {
-        await scopedSynchronizeAll({ scope, allowOverwrite:true, restoreMissingLocal:true, onProgress });
+        await scopedSynchronizeAll({ scope, requestedMode:target, effectiveMode:current.mode, allowOverwrite:true, restoreMissingLocal:true, onProgress });
         await remoteIntegrity({ allowPluginOnly:true });
       } else if (current.mode === MODE_SERVER_ONLY && target !== MODE_SERVER_ONLY) {
         await scopedRestoreAll({ scope, onProgress });
       }
       const saved = await persistScopedMode(target, scope, { source:'safe_scope_mode_transition' });
-      return { changed:true, from:current.mode, to:target, scope, modeLabel:modeLabel(target), config:saved };
+      return { changed:true, requestedMode:target, effectiveMode:target, from:current.mode, to:target, scope, modeLabel:modeLabel(target), config:saved };
     } catch (error) {
       state.scopeRouting.transientModes.delete(scope.scopeId);
+      error.requestedMode = target; error.effectiveMode = current.mode;
+      error.modeTransition = { requestedMode: target, effectiveMode: current.mode, from: current.mode, to: target, scope };
       throw error;
     }
   };
@@ -5345,10 +5487,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
         urlChanged = true;
       }
       const modeResult = await scopedSetModeSafely(targetMode, { ...operationOptions, scope });
-      const from = { mode:currentMode, modeLabel:modeLabel(currentMode), url:currentUrl, scope };
-      const to = { mode:targetMode, modeLabel:modeLabel(targetMode), url:targetUrl, scope };
-      return { ok:true, scope, url:targetUrl, mode:targetMode, modeLabel:modeLabel(targetMode), from, to, transition:modeResult, modeResult, connectionTest };
+      const effectiveMode = normalizeMode(modeResult?.effectiveMode || targetMode);
+      const from = { mode:currentMode, modeLabel:modeLabel(currentMode), requestedMode:currentMode, effectiveMode:currentMode, url:currentUrl, scope };
+      const to = { mode:effectiveMode, modeLabel:modeLabel(effectiveMode), requestedMode:targetMode, effectiveMode, url:targetUrl, scope };
+      return { ok:true, scope, url:targetUrl, mode:effectiveMode, modeLabel:modeLabel(effectiveMode), requestedMode:targetMode, effectiveMode, from, to, transition:modeResult, modeResult, connectionTest };
     } catch (error) {
+      error.requestedMode = targetMode; error.effectiveMode = currentMode;
+      error.modeTransition = { requestedMode: targetMode, effectiveMode: currentMode, from: currentMode, to: targetMode, scope };
       if (urlChanged) {
         try { await persistServerUrl(currentUrl); resetBootstrapCache(); }
         catch (rollbackError) { error.urlRollbackError = compact(rollbackError?.message || rollbackError, 300); }
@@ -5395,13 +5540,14 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     if (!random) random = `${now.toString(36)}_${Math.random().toString(36).slice(2,10)}`;
     const jobId = `${namespace}_${kind}_${scope.scopeId}_${random}`.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 240);
     const currentMode = (await readScopeMode(scope, true)).mode;
+    const requestedMode = target.requestedMode ? normalizeMode(target.requestedMode) : (target.mode ? normalizeMode(target.mode) : currentMode);
     const currentUrl = normalizeServerUrl(await getArgumentValue(urlArguments, defaultUrl));
     state.syncJob.current = {
       schema: SYNC_JOB_SCHEMA, namespace, pluginId, pluginVersion,
       jobId, id: jobId, kind: String(kind || 'manual_sync'),
       scopeId: scope.scopeId, scopeKey: scope.scopeKey, scopeLabel: scope.label,
-      sourceMode: currentMode, sourceUrl: currentUrl,
-      targetMode: target.mode ? normalizeMode(target.mode) : currentMode,
+      sourceMode: currentMode, sourceUrl: currentUrl, requestedMode, effectiveMode: currentMode,
+      targetMode: requestedMode,
       targetUrl: target.url ? normalizeServerUrl(target.url) : currentUrl,
       status: 'queued', phase: 'queued', message: '작업을 준비하고 있습니다.',
       startedAt: now, updatedAt: now, lastActivityAt: now, finishedAt: 0,
@@ -5433,7 +5579,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       try {
         let result;
         if (job.kind === 'connection_config') {
-          result = await scopedConfigureConnection({ mode: job.targetMode, url: job.targetUrl }, { scope, onProgress: applySyncProgressToJob });
+          result = await scopedConfigureConnection({ mode: job.requestedMode || job.targetMode, url: job.targetUrl }, { scope, onProgress: applySyncProgressToJob });
         } else if (job.kind === 'manual_sync') {
           await assertRecoveryActionAllowed(scope, 'manual_sync');
           const mode = (await readScopeMode(scope, true)).mode;
@@ -5447,6 +5593,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           throw new Error(`memory_suite_unknown_background_job:${job.kind}`);
         }
         updateSyncJob({
+          requestedMode: result?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+          effectiveMode: result?.effectiveMode || state.syncJob.current?.sourceMode || '',
           status: 'completed', phase: 'completed', currentAction: '완료', currentKey: '',
           message: '작업이 안전하게 완료되었습니다.', result: cloneSyncJob(result), error: '',
           nextRetryAt: 0, finishedAt: Date.now()
@@ -5469,6 +5617,8 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
           return null;
         }
         updateSyncJob({
+          requestedMode: error?.requestedMode || state.syncJob.current?.requestedMode || state.syncJob.current?.targetMode || '',
+          effectiveMode: error?.effectiveMode || state.syncJob.current?.sourceMode || '',
           status: 'failed', phase: 'failed', currentAction: '작업 중단', currentKey: '',
           message: '작업을 완료하지 못했습니다.', error: compact(error?.message || error, 700),
           result:compactRestoreEvidence(error?.result || null),
@@ -5687,21 +5837,24 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
       card.classList.add('show'); const total=Math.max(0,Number(job.totalItems||0)), done=Math.max(0,Number(job.processedItems||0)); const percent=total?Math.min(100,Math.round(done/total*100)):0;
       card.classList.toggle('terminal',terminal); card.classList.toggle('failed',job.status==='failed');
       q('[data-job-title]').textContent = `${job.message || (terminal?'작업 결과':'작업 진행 중')}${total ? ` · ${terminal&&job.status==='completed'?100:percent}%` : ''}`; q('[data-job-bar]').style.width=`${terminal&&job.status==='completed'?100:percent}%`;
-      q('[data-job-phase]').textContent=`현재 단계: ${job.phase || '준비'}`; q('[data-job-count]').textContent=`진행: ${done.toLocaleString()} / ${total ? total.toLocaleString() : '조사 중'}`;
+      q('[data-job-phase]').textContent=`현재 단계: ${job.phase || '준비'}`; q('[data-job-count]').textContent=`진행: ${done.toLocaleString()} / ${total || terminal ? total.toLocaleString() : '조사 중'}${job.status==='completed' && total===0 ? ' · 이동할 데이터 없음' : ''}`;
       q('[data-job-bytes]').textContent=`처리: ${formatBytes(job.processedBytes)} · 전송: ${formatBytes(job.transferredBytes)}`; q('[data-job-time]').textContent=`경과: ${Math.max(0,Math.floor((Date.now()-Number(job.startedAt||Date.now()))/1000))}초`;
       q('[data-job-retry]').textContent=`재시도 ${Number(job.retryCount||0)} · 실패 ${Number(job.failures||0)}`; q('[data-job-key]').textContent=`현재: ${job.currentKey || job.currentAction || '-'}`;
       const terminalActions=q('[data-job-terminal-actions]'); terminalActions.style.display=terminal?'flex':'none';
       const result=job.result&&typeof job.result==='object'?job.result:{};
       q('[data-job-result]').textContent=terminal
-        ? [job.status==='completed'?'완료 결과':'실패 결과',integratesCompute?`저장 방식 ${modeLabel(job.targetMode || initial.mode)} · 연산 ${normalizeMode(job.targetMode || initial.mode) === MODE_PLUGIN_ONLY ? '로컬' : '서버 우선 · 실패 시 로컬'}`:'',`복원 ${Number(job.restored||result.restored||0)} · 업로드 ${Number(job.uploaded||result.uploaded||0)} · 일치 ${Number(job.matched||result.matched||0)}`,`삭제 표식 ${Number(job.removedByTombstone||result.removed||0)} · 검증 ${Number(result.verified||0)}`,job.recoveryRequired?'복구 필수 잠금: 활성 · 서버 단독 유지':'복구 필수 잠금: 없음',job.error?`오류: ${job.error}`:''].filter(Boolean).join('\n')
+        ? [job.status==='completed'?'완료 결과':'실패 결과',`요청 모드: ${modeLabel(job.requestedMode || job.targetMode || initial.mode)}`,`현재 적용 모드: ${modeLabel(job.effectiveMode || result.effectiveMode || job.sourceMode || initial.mode)}`,job.status==='failed'?'전환 미완료 · 현재 적용 모드를 확인하세요.':'',integratesCompute?`연산: ${normalizeMode(job.effectiveMode || result.effectiveMode || job.sourceMode || initial.mode) === MODE_PLUGIN_ONLY ? '로컬' : '서버 우선 · 실패 시 로컬'}`:'',`복원 ${Number(job.restored||result.restored||0)} · 업로드 ${Number(job.uploaded||result.uploaded||0)} · 일치 ${Number(job.matched||result.matched||0)}`,`삭제 표식 ${Number(job.removedByTombstone||result.removed||0)} · 검증 ${Number(result.verified||0)}`,job.recoveryRequired?'복구 필수 잠금: 활성 · 서버 단독 유지':'복구 필수 잠금: 없음',job.error?`오류: ${job.error}`:''].filter(Boolean).join('\n')
         : '';
+      const diagnosticText = terminal ? JSON.stringify({ schema:'memory-suite.scope-sync-diagnostics.v1', requestedMode:job.requestedMode || job.targetMode || '', effectiveMode:job.effectiveMode || job.sourceMode || '', failures:result.failures || [], metrics:result.metrics || {}, result }, null, 2) : '';
+      const diagnosticBox = q('[data-job-diagnostics]'); if (diagnosticBox) { diagnosticBox.value = diagnosticText; diagnosticBox.style.display = terminal && diagnosticText ? 'block' : 'none'; }
+      const copyButton = q('[data-job-copy]'); if (copyButton && !copyButton.dataset.bound) { copyButton.dataset.bound = '1'; copyButton.onclick = async () => { try { const value = q('[data-job-diagnostics]')?.value || ''; if (navigator?.clipboard?.writeText) await navigator.clipboard.writeText(value); else { q('[data-job-diagnostics]')?.select?.(); document.execCommand?.('copy'); } setMessage('Detailed diagnostics copied','good'); } catch (error) { setMessage('Detailed diagnostics copy failed\n' + (error?.message || error),'error'); } }; }
       if(terminal&&job.status==='completed'&&normalizeMode(job.targetMode)!==MODE_PLUGIN_ONLY&&computeProbeJobId!==job.jobId){computeProbeJobId=job.jobId;try{computeBridge?.scheduleProbe?.(0);}catch(_){}}
       if(terminal&&job.jobId!==terminalRefreshId){terminalRefreshId=job.jobId;scheduleLifecycleTimeout(()=>{void scopedGetConnectionSettings({scope:initial.scope,force:true}).then(settings=>applyRecoveryGuard(settings.recoveryRequired)).catch(()=>{});},0);}
     };
     for(const [selector,choice] of [['[data-reset-empty]','empty'],['[data-reset-upload]','upload']]){
       q(selector).onclick=async()=>{try{await acceptServerReset(choice);setMessage('선택을 저장했습니다. 기존 실행의 재업로드를 막기 위해 RisuAI를 새로고침한 뒤 사용하세요.','good');}catch(error){setMessage(error.message,'error');}};
     }
-    q('[data-test]').onclick = async()=>{ setMessage(integratesCompute?'Storage와 Compute 연결을 확인하고 있습니다…':'서버 연결을 확인하고 있습니다…'); const storageResult=await testConnection(q('[data-url]').value); let computeResult=null; if(integratesCompute&&storageResult.ok&&computeBridge?.probe){try{computeResult=await computeBridge.probe({force:true,reason:'integrated_connection_test'});}catch(error){computeResult={ok:false,error:compact(error?.message||error,300)};}} const storageLine=storageResult.ok?`${integratesCompute?'Storage: ':''}연결됨 · Librarian System ${storageResult.serverVersion} · 항목 ${storageResult.liveRecords}`:`${integratesCompute?'Storage: ':''}연결 실패 · ${storageResult.error}`; const computeLine=!integratesCompute?'':!storageResult.ok?'Compute: Storage 연결 실패로 확인하지 않음':computeResult?.ok?`Compute: 연결됨 · ${Number(computeResult.operations?.length||computeResult.operationCount||0)}개 연산`:`Compute: 연결 실패 · 연산 시 로컬 폴백 · ${computeResult?.error||computeResult?.reason||'unavailable'}`; setMessage([storageLine,computeLine].filter(Boolean).join('\n'),storageResult.ok&&(!integratesCompute||computeResult?.ok)?'good':storageResult.ok?'':'error'); };
+    q('[data-test]').onclick = async()=>{ setMessage(integratesCompute?'Storage와 Compute 연결을 확인하고 있습니다…':'서버 연결을 확인하고 있습니다…'); const storageResult=await testConnection(q('[data-url]').value); let computeResult=null; if(integratesCompute&&storageResult.ok&&computeBridge?.probe){try{computeResult=await computeBridge.probe({force:true,deep:true,reason:'integrated_connection_test'});}catch(error){computeResult={ok:false,error:compact(error?.message||error,300)};}} const storageLine=storageResult.ok?`${integratesCompute?'Storage: ':''}연결됨 · Librarian System ${storageResult.serverVersion} · 항목 ${storageResult.liveRecords}`:`${integratesCompute?'Storage: ':''}연결 실패 · ${storageResult.error}`; const computeLine=!integratesCompute?'':!storageResult.ok?'Compute: Storage 연결 실패로 확인하지 않음':computeResult?.ok?`Compute: 연결됨 · ${Number(computeResult.operations?.length||computeResult.operationCount||0)}개 연산`:`Compute: 연결 실패 · 연산 시 로컬 폴백 · ${computeResult?.error||computeResult?.reason||'unavailable'}`; setMessage([storageLine,computeLine].filter(Boolean).join('\n'),storageResult.ok&&(!integratesCompute||computeResult?.ok)?'good':storageResult.ok?'':'error'); };
     q('[data-apply]').onclick = async()=>{ const mode=root.querySelector(`input[name="${rootId}-mode"]:checked`)?.value||MODE_PLUGIN_ONLY; try{const job=await scopedStartConnectionConfigurationJob({mode,url:q('[data-url]').value,scope:initial.scope}); setMessage('설정 적용과 현재 스코프 초기 동기화를 시작했습니다.'); renderJob(job);}catch(error){setMessage(`설정 적용 시작 실패\n${error?.message||error}`,'error');} };
     q('[data-sync]').onclick = async()=>{ try{const job=await scopedStartSynchronizationJob({scope:initial.scope});setMessage('현재 스코프 동기화를 시작했습니다.');renderJob(job);}catch(error){setMessage(`동기화 시작 실패\n${error?.userMessage||error?.message||error}`,'error');} };
     q('[data-restore]').onclick = async()=>{ try{const job=await scopedStartRestoreJob({scope:initial.scope});setMessage('현재 스코프 복구를 시작했습니다.');renderJob(job);}catch(error){setMessage(`복구 시작 실패\n${error?.userMessage||error?.message||error}`,'error');} };
@@ -6287,6 +6440,13 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
     getCachedDiagnostics,
     decorateDebugExport,
     decorateDebugExportSync,
+    managerPortable: async (action, body = {}) => {
+      const allowed=['capabilities','export-start','upload-start','upload-chunk','upload-finish','download-chunk','status','cancel','restore-plan','restore-execute'];
+      if(!allowed.includes(action))throw new Error('portable_action_not_supported');
+      const connection=await managerConnection();
+      if(connection.capabilities?.['portable-transfer.v1']!==true)throw new Error('portable_transfer_server_upgrade_required');
+      return (await managerRequest('POST','/v1/manager/portable/'+action,body)).result;
+    },
     managerControl: async (action, body = {}) => {
       const allowed=['status','backups','history','backup-create','backup-check','restore-plan','restore-execute'];
       if(!allowed.includes(action))throw new Error('control_action_not_supported');
@@ -6331,7 +6491,7 @@ const createMemorySuiteStorageBridge = (rawOptions = {}) => {
 
 };
 
-/* LIBRARIAN SYSTEM COMPUTE SDK v0.3.5
+/* LIBRARIAN SYSTEM COMPUTE SDK v0.3.6
  * Optional deterministic-compute client shared by Librarian System owner plugins.
  *
  * The plugin remains authoritative: local execution is always available, the
@@ -6497,51 +6657,54 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     return () => state.listeners.delete(listener);
   };
 
-  const capturedApis = [];
-  const captureApi = value => {
-    if (value && (typeof value === 'object' || typeof value === 'function') && !capturedApis.includes(value)) capturedApis.push(value);
+  const collectApis = () => {
+    const apis = [];
+    const captureApi = value => {
+      if (value && (typeof value === 'object' || typeof value === 'function') && !apis.includes(value)) apis.push(value);
+    };
+    captureApi(options.api);
+    try { if (typeof risuai !== 'undefined') captureApi(risuai); } catch (_) {}
+    try { if (typeof risuApi !== 'undefined') captureApi(risuApi); } catch (_) {}
+    try { if (typeof risuAPI !== 'undefined') captureApi(risuAPI); } catch (_) {}
+    try { if (typeof Risuai !== 'undefined') captureApi(Risuai); } catch (_) {}
+    try { if (typeof RisuAI !== 'undefined') captureApi(RisuAI); } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined') {
+        captureApi(globalThis.risuai);
+        captureApi(globalThis.risuApi);
+        captureApi(globalThis.risuAPI);
+        captureApi(globalThis.Risuai);
+        captureApi(globalThis.RisuAI);
+        captureApi(globalThis.__pluginApis__);
+      }
+    } catch (_) {}
+    return apis;
   };
-  captureApi(options.api);
-  try { if (typeof risuai !== 'undefined') captureApi(risuai); } catch (_) {}
-  try { if (typeof risuApi !== 'undefined') captureApi(risuApi); } catch (_) {}
-  try { if (typeof risuAPI !== 'undefined') captureApi(risuAPI); } catch (_) {}
-  try { if (typeof Risuai !== 'undefined') captureApi(Risuai); } catch (_) {}
-  try { if (typeof RisuAI !== 'undefined') captureApi(RisuAI); } catch (_) {}
-  try {
-    if (typeof globalThis !== 'undefined') {
-      captureApi(globalThis.risuai);
-      captureApi(globalThis.risuApi);
-      captureApi(globalThis.risuAPI);
-      captureApi(globalThis.Risuai);
-      captureApi(globalThis.RisuAI);
-      captureApi(globalThis.__pluginApis__);
+  const capturedFetch = (...args) => {
+    if (typeof options.fetch === 'function') return options.fetch(...args);
+    for (const api of collectApis()) {
+      if (typeof api?.nativeFetch === 'function') return api.nativeFetch(...args);
+      if (typeof api?.risuFetch === 'function') return api.risuFetch(...args);
     }
-  } catch (_) {}
-  const capturedFetch = (() => {
-    if (typeof options.fetch === 'function') return options.fetch;
-    for (const api of capturedApis) {
-      if (typeof api?.nativeFetch === 'function') return api.nativeFetch.bind(api);
-      if (typeof api?.risuFetch === 'function') return api.risuFetch.bind(api);
-    }
-    try { if (typeof fetch === 'function') return fetch.bind(globalThis); } catch (_) {}
+    if (typeof fetch === 'function') return fetch(...args);
     return null;
-  })();
-  const capturedGetArgument = (() => {
-    if (typeof options.getArgument === 'function') return options.getArgument;
-    for (const api of capturedApis) {
-      if (typeof api?.getArgument === 'function') return api.getArgument.bind(api);
-      if (typeof api?.getArg === 'function') return api.getArg.bind(api);
+  };
+  const capturedGetArgument = (...args) => {
+    if (typeof options.getArgument === 'function') return options.getArgument(...args);
+    for (const api of collectApis()) {
+      if (typeof api?.getArgument === 'function') return api.getArgument(...args);
+      if (typeof api?.getArg === 'function') return api.getArg(...args);
     }
     return null;
-  })();
-  const capturedSetArgument = (() => {
-    if (typeof options.setArgument === 'function') return options.setArgument;
-    for (const api of capturedApis) {
-      if (typeof api?.setArgument === 'function') return api.setArgument.bind(api);
-      if (typeof api?.setArg === 'function') return api.setArg.bind(api);
+  };
+  const capturedSetArgument = (...args) => {
+    if (typeof options.setArgument === 'function') return options.setArgument(...args);
+    for (const api of collectApis()) {
+      if (typeof api?.setArgument === 'function') return api.setArgument(...args);
+      if (typeof api?.setArg === 'function') return api.setArg(...args);
     }
     return null;
-  })();
+  };
 
   const readMode = async (force = false) => {
     assertActive();
@@ -6550,7 +6713,7 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     let raw = defaultMode;
     try {
       if (typeof options.modeProvider === 'function') raw = await options.modeProvider({ namespace, pluginId });
-      else if (capturedGetArgument) raw = await capturedGetArgument(modeArgument);
+      else raw = await capturedGetArgument(modeArgument);
     } catch (_) { raw = state.mode.value || defaultMode; }
     const value = normalizeMode(raw || defaultMode);
     state.mode = { value, at: now(), transient: state.mode.transient };
@@ -6564,7 +6727,7 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
       if (typeof options.modeSetter === 'function') {
         const accepted = await options.modeSetter(value, { namespace, pluginId });
         if (accepted === false) throw new Error('compute_mode_write_rejected');
-      } else if (capturedSetArgument) {
+      } else if (typeof options.setArgument === 'function' || collectApis().some(a => typeof a?.setArgument === 'function' || typeof a?.setArg === 'function')) {
         const accepted = await capturedSetArgument(modeArgument, value);
         if (accepted === false) throw new Error('compute_mode_write_rejected');
       } else {
@@ -6827,7 +6990,7 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
   const resolveServerUrl = async () => {
     let value = defaultUrl;
     if (typeof options.urlProvider === 'function') value = await options.urlProvider({ namespace, pluginId });
-    else if (capturedGetArgument && urlArgument) value = await capturedGetArgument(urlArgument);
+    else if (urlArgument) value = await capturedGetArgument(urlArgument);
     return normalizeServerUrl(value || defaultUrl);
   };
   const validateComputeBootstrap = (payload, requestedUrl) => {
@@ -6853,7 +7016,8 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     }
     return {
       requestedUrl: normalizeServerUrl(requestedUrl),
-      url: normalizeServerUrl(payload.url),
+      url: normalizeServerUrl(requestedUrl || payload.url),
+      advertisedUrl: normalizeServerUrl(payload.url),
       token: String(payload.token),
       version: String(payload.version || ''),
       capabilities: { ...(payload.capabilities || {}) },
@@ -6954,6 +7118,13 @@ const createMemorySuiteComputeBridge = (rawOptions = {}) => {
     emitStatus('probing', String(probeOptions.reason || ''));
     try {
       const connection = await ensureComputeConnectionRaw(force, Math.max(250, Number(probeOptions.timeoutMs || probeTimeoutMs) || probeTimeoutMs), epoch);
+      if (probeOptions.deep === true) {
+        const checked = await fetchJson(connection.url + '/v1/compute/capabilities', {
+          method: 'GET', headers: { Authorization: 'Bearer ' + connection.token,
+            'X-Memory-Suite-Plugin': pluginId, 'X-Memory-Suite-Plugin-Version': pluginVersion }
+        }, 'Librarian System compute capabilities', Math.max(250, Number(probeOptions.timeoutMs || probeTimeoutMs)), epoch);
+        if (checked?.ok !== true) throw Object.assign(new Error('compute_capabilities_probe_failed'), { code: 'MEMORY_SUITE_COMPUTE_PROBE_FAILED' });
+      }
       circuitSuccess(ticket);
       emitStatus('ready');
       return {
